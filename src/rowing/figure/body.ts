@@ -146,7 +146,6 @@ export function buildFigureGeometry(a: Anthro, rest: Rig): THREE.BufferGeometry 
       if (t > 1.02) return skin;
       if (t > 0.88 && az > 0.55) return skin; // bare shoulders (tank cut)
       if (t > 0.9 && v.x > 0 && Math.abs(v.z) < 0.07 * wS) return skin; // scoop neck
-      if (t > 0.85 && t < 0.89 && az > 0.4) return C_WHITE; // armhole trim
       return C_CARD;
     },
     (y, ang) => {
@@ -248,7 +247,7 @@ export function buildFigureGeometry(a: Anthro, rest: Rig): THREE.BufferGeometry 
       b.blob(
         9,
         24,
-        (uu, out, fr) => hs.surf(uu, out, THREE.MathUtils.lerp(0.009, 0.0035, Math.pow(fr, 4))),
+        (uu, out, fr) => hs.surf(uu, out, THREE.MathUtils.lerp(0.006, 0.003, Math.pow(fr, 4))),
         () => cc,
         HW,
         (ph) => [0, edgeTh(ph)],
