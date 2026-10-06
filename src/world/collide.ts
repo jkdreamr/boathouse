@@ -35,6 +35,10 @@ export function addFlatFloor(minX: number, maxX: number, minZ: number, maxZ: num
   floors.push({ minX, maxX, minZ, maxZ, y: () => y });
 }
 
+export function addDynamicFlatFloor(minX: number, maxX: number, minZ: number, maxZ: number, y: () => number) {
+  floors.push({ minX, maxX, minZ, maxZ, y: () => y() });
+}
+
 /** Ramp rising linearly along an axis from y0 at the low edge to y1 at the high edge. */
 export function addRamp(
   minX: number,
@@ -55,6 +59,29 @@ export function addRamp(
       let t = axis === 'x' ? (x - minX) / (maxX - minX) : (z - minZ) / (maxZ - minZ);
       if (reverse) t = 1 - t;
       return y0 + (y1 - y0) * Math.min(1, Math.max(0, t));
+    },
+  });
+}
+
+export function addDynamicRamp(
+  minX: number,
+  maxX: number,
+  minZ: number,
+  maxZ: number,
+  axis: 'x' | 'z',
+  y0: () => number,
+  y1: () => number,
+  reverse = false,
+) {
+  floors.push({
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    y: (x, z) => {
+      let t = axis === 'x' ? (x - minX) / (maxX - minX) : (z - minZ) / (maxZ - minZ);
+      if (reverse) t = 1 - t;
+      return y0() + (y1() - y0()) * Math.min(1, Math.max(0, t));
     },
   });
 }

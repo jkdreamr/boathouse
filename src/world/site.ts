@@ -1,15 +1,21 @@
 import * as THREE from 'three';
 import { boxMeters, textTexture } from '../textures';
 import { hullGeometry } from '../rowing/hull';
-import { addFlatFloor, addRamp, addWall } from './collide';
+import { addDynamicFlatFloor, addDynamicRamp, addFlatFloor, addWall } from './collide';
 import { mesh } from './build';
 import { mats } from './materials';
 import { PAD, PAD_Y } from './terrain';
+import { conditions } from '../sim/conditions';
+import { addSystem } from '../sim/systems';
 
 export const DOCK_Y = 0.5;
 export const DOCK = { minX: -45, maxX: 45, minZ: -14.2, maxZ: -11 };
 /** Where the varsity eight sits alongside the dock (hull centerline). */
 export const MOORING = new THREE.Vector3(0, 0, -18);
+export const floatingDock = new THREE.Group();
+floatingDock.name = 'floating-dock';
+export const gangway = new THREE.Group();
+gangway.name = 'gangway';
 
 function decal(x0: number, x1: number, z0: number, z1: number, mat: THREE.Material, y = PAD_Y + 0.006) {
   const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
@@ -368,37 +374,52 @@ export function buildSite(scene: THREE.Scene) {
   // gangway down to the floating dock
   const gl = Math.hypot(11, PAD_Y - DOCK_Y);
   const ga = Math.atan2(PAD_Y - DOCK_Y, 11);
+  gangway.position.set(0, PAD_Y, 0.2);
+  gangway.rotation.x = -ga;
+  root.add(gangway);
+  const localPosition = (x: number, y: number, z: number) => {
+    const dy = y - PAD_Y;
+    const dz = z - 0.2;
+    return new THREE.Vector3(x, dy * Math.cos(ga) - dz * Math.sin(ga), dy * Math.sin(ga) + dz * Math.cos(ga));
+  };
+  const addGangwayMesh = (m: THREE.Mesh, x: number, y: number, z: number, upright = false) => {
+    m.position.copy(localPosition(x, y, z));
+    if (upright) m.rotation.x = ga;
+    gangway.add(m);
+  };
   const gw = mesh(boxMeters(1.6, 0.1, gl), M.alu);
-  gw.rotation.x = -ga;
-  gw.position.set(0, (PAD_Y + DOCK_Y) / 2 - 0.02, -5.5);
-  root.add(gw);
+  addGangwayMesh(gw, 0, (PAD_Y + DOCK_Y) / 2 - 0.02, -5.5);
   for (const s of [-1, 1]) {
     const rail = mesh(new THREE.BoxGeometry(0.06, 0.06, gl), M.alu);
-    rail.rotation.x = -ga;
-    rail.position.set(s * 0.82, (PAD_Y + DOCK_Y) / 2 + 1.0, -5.5);
-    root.add(rail);
+    addGangwayMesh(rail, s * 0.82, (PAD_Y + DOCK_Y) / 2 + 1.0, -5.5);
     const truss = mesh(new THREE.BoxGeometry(0.04, 0.5, gl), M.alu);
-    truss.rotation.x = -ga;
-    truss.position.set(s * 0.82, (PAD_Y + DOCK_Y) / 2 + 0.25, -5.5);
-    root.add(truss);
+    addGangwayMesh(truss, s * 0.82, (PAD_Y + DOCK_Y) / 2 + 0.25, -5.5);
     for (let k = 0; k <= 6; k++) {
       const z = -11 + (11 * k) / 6;
       const y = DOCK_Y + ((z + 11) / 11) * (PAD_Y - DOCK_Y);
       const p = mesh(new THREE.BoxGeometry(0.05, 1.0, 0.05), M.alu);
-      p.position.set(s * 0.82, y + 0.5, z);
-      root.add(p);
+      addGangwayMesh(p, s * 0.82, y + 0.5, z, true);
     }
   }
-  addRamp(-0.8, 0.8, -11.2, 0.2, 'z', DOCK_Y, PAD_Y);
+  addDynamicRamp(-0.8, 0.8, -11.2, 0.2, 'z', () => DOCK_Y + conditions.level, () => PAD_Y);
   addWall(-1.0, -0.85, -11, -0.2, 0, 3);
   addWall(0.85, 1.0, -11, -0.2, 0, 3);
+  addSystem({
+    update: () => {
+      const dockLevel = DOCK_Y + conditions.level;
+      gangway.rotation.x = -Math.asin(THREE.MathUtils.clamp((PAD_Y - dockLevel) / gl, -1, 1));
+      floatingDock.position.y = conditions.level;
+    },
+  });
 
   // floating docks
-  root.add(floatBox(DOCK.maxX - DOCK.minX, DOCK.maxZ - DOCK.minZ, 0, (DOCK.minZ + DOCK.maxZ) / 2, M.deck));
-  addFlatFloor(DOCK.minX, DOCK.maxX, DOCK.minZ, DOCK.maxZ, DOCK_Y);
+  floatingDock.position.y = conditions.level;
+  root.add(floatingDock);
+  floatingDock.add(floatBox(DOCK.maxX - DOCK.minX, DOCK.maxZ - DOCK.minZ, 0, (DOCK.minZ + DOCK.maxZ) / 2, M.deck));
+  addDynamicFlatFloor(DOCK.minX, DOCK.maxX, DOCK.minZ, DOCK.maxZ, () => DOCK_Y + conditions.level);
   for (const fx of [-43, 43]) {
-    root.add(floatBox(3, 12, fx, -20.2, M.deckGray));
-    addFlatFloor(fx - 1.5, fx + 1.5, -26.2, DOCK.minZ, DOCK_Y);
+    floatingDock.add(floatBox(3, 12, fx, -20.2, M.deckGray));
+    addDynamicFlatFloor(fx - 1.5, fx + 1.5, -26.2, DOCK.minZ, () => DOCK_Y + conditions.level);
   }
   const pileMat = new THREE.MeshStandardMaterial({ color: '#4a3a30', roughness: 0.8 });
   const capMat = M.white;
@@ -422,25 +443,25 @@ export function buildSite(scene: THREE.Scene) {
   for (let i = 0; i < 6; i++) {
     const cleat = mesh(new THREE.BoxGeometry(0.3, 0.08, 0.08), M.darkSteel);
     cleat.position.set(-12 + i * 5, DOCK_Y + 0.05, DOCK.minZ + 0.2);
-    root.add(cleat);
+    floatingDock.add(cleat);
   }
 
   const l1 = launch('#c8ccd0');
   l1.position.set(46.6, 0, -21);
   l1.rotation.y = Math.PI / 2;
-  root.add(l1);
+  floatingDock.add(l1);
   const l2 = launch('#f0f0ee');
   l2.position.set(-46.6, 0, -21);
   l2.rotation.y = -Math.PI / 2;
-  root.add(l2);
+  floatingDock.add(l2);
   const l3 = launch('#b8bcc2');
   l3.position.set(-34, 0, -10);
-  root.add(l3);
+  floatingDock.add(l3);
 
   const ship = msiShip();
   ship.position.set(86, 0, -21);
-  root.add(ship);
+  floatingDock.add(ship);
   const msiFloat = floatBox(30, 2.6, 85, -16.3, M.deckGray);
-  root.add(msiFloat);
+  floatingDock.add(msiFloat);
   return root;
 }

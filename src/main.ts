@@ -2,7 +2,9 @@ import './style.css';
 import * as THREE from 'three';
 import { Sound } from './audio';
 import { Player } from './player';
-import { Eight } from './rowing/eight';
+import { CrewBoat } from './rowing/crewboat';
+import { conditions, updateConditions } from './sim/conditions';
+import { systems } from './sim/systems';
 import { setMaxAnisotropy } from './textures';
 import { buildBoathouse, BALCONY_Y } from './world/boathouse';
 import { Environment, PRESETS } from './world/env';
@@ -30,7 +32,7 @@ buildSite(scene);
 buildBoathouse(scene);
 buildBackdrop(scene);
 
-const eight = new Eight(scene);
+const eight = new CrewBoat(scene, '8+');
 eight.reset(MOORING, 0);
 const sound = new Sound();
 eight.onCatch = () => sound.catch();
@@ -239,6 +241,8 @@ let hudTimer = 0;
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   time += dt;
+  updateConditions(dt);
+  for (const system of systems) system.update(dt, time);
   if (mode === 'row') {
     const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
     if (keys.has('Space')) eight.stroke();
@@ -291,4 +295,4 @@ function frame() {
 
 syncUI();
 frame();
-Object.assign(window, { __app: { scene, camera, player, eight, env, board, toWalk, goDock } });
+Object.assign(window, { __app: { scene, camera, player, eight, env, conditions, board, toWalk, goDock } });

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { Water } from 'three/addons/objects/Water.js';
 import { waterNormalTexture } from '../textures';
+import { conditions } from '../sim/conditions';
 
 export interface TimePreset {
   name: string;
@@ -155,6 +156,7 @@ export class Environment {
   /** Keep the shadow frustum centered on what the camera is looking at, snapped to texels. */
   update(dt: number, focus: THREE.Vector3) {
     this.water.material.uniforms.time.value += dt * 0.35;
+    this.water.position.y = conditions.level;
     const texel = 140 / 4096;
     const fx = Math.round(focus.x / texel) * texel;
     const fz = Math.round(focus.z / texel) * texel;
