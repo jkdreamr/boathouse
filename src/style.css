@@ -39,6 +39,16 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 }
 #topbar > * { pointer-events: auto; }
 #topbar nav { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+/* [realism:water] */
+.hudchip {
+  display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 14px; background: var(--panel); backdrop-filter: blur(10px); font-size: 14px;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.tide-controls { display: inline-flex; }
+.tide-controls button { border-radius: 0; }
+.tide-controls button:first-child { border-radius: 999px 0 0 999px; }
+.tide-controls button:last-child { margin-left: -1px; border-radius: 0 999px 999px 0; }
 .chip {
   display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 999px; padding: 6px 14px 6px 6px; backdrop-filter: blur(10px); font-size: 14px;

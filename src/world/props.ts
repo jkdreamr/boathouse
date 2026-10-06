@@ -1,6 +1,156 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { centerline, fbm, northBank, southBank, terrainHeight } from './terrain';
+import { conditions } from '../sim/conditions';
+import { addSystem } from '../sim/systems';
+
+// [realism:water]
+const swayUniforms = {
+  uTime: { value: 0 },
+  uWind: { value: new THREE.Vector2() },
+  uGust: { value: 0 },
+};
+
+addSystem({
+  update: (dt) => {
+    swayUniforms.uTime.value += dt;
+    swayUniforms.uWind.value.copy(conditions.wind);
+    swayUniforms.uGust.value = conditions.gust;
+  },
+});
+
+export function applyWindSway(material: THREE.Material, options: { stiffness?: number; minY?: number } = {}) {
+  const stiffness = options.stiffness ?? 0.0009;
+  const minY = options.minY ?? 0;
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, swayUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uTime;
+uniform vec2 uWind;
+uniform float uGust;`,
+      )
+      .replace(
+        '#include <project_vertex>',
+        `vec4 realismLocalPosition = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+realismLocalPosition = instanceMatrix * realismLocalPosition;
+#endif
+vec4 realismWorldPosition = modelMatrix * realismLocalPosition;
+float realismHeight = max(transformed.y - ${minY.toFixed(3)}, 0.0);
+float realismWindSpeed = length(uWind);
+float realismFlutter = sin(uTime * 5.0 + realismWorldPosition.x * 0.3 + realismWorldPosition.z * 0.2) *
+  0.002 * realismHeight * realismWindSpeed * (0.5 + uGust);
+vec2 realismFlutterDirection = realismWindSpeed > 0.0001 ? normalize(vec2(-uWind.y, uWind.x)) : vec2(1.0, 0.0);
+realismWorldPosition.xz += uWind * (${stiffness.toFixed(6)} * realismHeight * realismHeight) +
+  realismFlutterDirection * realismFlutter;
+vec4 mvPosition = viewMatrix * realismWorldPosition;
+gl_Position = projectionMatrix * mvPosition;`,
+      );
+  };
+  const previousKey = material.customProgramCacheKey.bind(material);
+  material.customProgramCacheKey = () => `${previousKey()}-water-sway-${stiffness}-${minY}`;
+}
+
+// [realism:water]
+function cordgrassClusterGeometry() {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let blade = 0; blade < 6; blade++) {
+    const a = (blade / 6) * Math.PI * 2;
+    const dx = Math.cos(a);
+    const dz = Math.sin(a);
+    const height = 0.8 + (blade % 4) * 0.11;
+    const baseX = dx * 0.05;
+    const baseZ = dz * 0.05;
+    const widthX = -dz * 0.045;
+    const widthZ = dx * 0.045;
+    const offset = positions.length / 3;
+    positions.push(
+      baseX - widthX,
+      0,
+      baseZ - widthZ,
+      baseX + dx * height * 0.45 - widthX * 0.5,
+      height * 0.55,
+      baseZ + dz * height * 0.45 - widthZ * 0.5,
+      baseX + dx * height * 0.45 + widthX * 0.5,
+      height * 0.55,
+      baseZ + dz * height * 0.45 + widthZ * 0.5,
+      baseX + dx * height * 0.28,
+      height,
+      baseZ + dz * height * 0.28,
+    );
+    indices.push(offset, offset + 1, offset + 2, offset + 1, offset + 3, offset + 2);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+// [realism:water]
+function addMarshPlants(root: THREE.Group, rnd: () => number, matrix: THREE.Matrix4, color: THREE.Color) {
+  const cordgrassMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', side: THREE.DoubleSide, roughness: 0.9 });
+  applyWindSway(cordgrassMaterial, { stiffness: 0.012, minY: 0 });
+  const cordgrass = new THREE.InstancedMesh(cordgrassClusterGeometry(), cordgrassMaterial, 4000);
+  cordgrass.castShadow = false;
+  cordgrass.receiveShadow = false;
+  let cordCount = 0;
+  for (let attempt = 0; cordCount < cordgrass.count && attempt < 24000; attempt++) {
+    const x = -900 + rnd() * 2700;
+    const southSide = rnd() < 0.5;
+    if (southSide && x >= -152 && x <= 172) continue;
+    const distance = rnd() * 9;
+    const z = southSide ? southBank(x) - distance : northBank(x) + distance;
+    const h = terrainHeight(x, z);
+    if (h < -0.9 || h > 0.25) continue;
+    matrix.compose(
+      new THREE.Vector3(x, h, z),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * Math.PI * 2),
+      new THREE.Vector3(0.8 + rnd() * 0.45, 0.8 + rnd() * 0.45, 0.8 + rnd() * 0.45),
+    );
+    cordgrass.setMatrixAt(cordCount, matrix);
+    cordgrass.setColorAt(cordCount, color.setHSL(0.13 + rnd() * 0.07, 0.3 + rnd() * 0.18, 0.28 + rnd() * 0.22));
+    cordCount++;
+  }
+  cordgrass.count = cordCount;
+  cordgrass.instanceMatrix.needsUpdate = true;
+  if (cordgrass.instanceColor) cordgrass.instanceColor.needsUpdate = true;
+  root.add(cordgrass);
+
+  const pickleweed = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 8, 6),
+    new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9 }),
+    2500,
+  );
+  pickleweed.castShadow = false;
+  pickleweed.receiveShadow = false;
+  let pickleCount = 0;
+  for (let attempt = 0; pickleCount < pickleweed.count && attempt < 18000; attempt++) {
+    const x = -900 + rnd() * 2700;
+    const southSide = rnd() < 0.5;
+    if (southSide && x >= -152 && x <= 172) continue;
+    const distance = 0.5 + rnd() * 7;
+    const z = southSide ? southBank(x) + distance : northBank(x) - distance;
+    const h = terrainHeight(x, z);
+    if (h < 0.25 || h > 0.6) continue;
+    matrix.compose(
+      new THREE.Vector3(x, h + 0.06, z),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * Math.PI * 2),
+      new THREE.Vector3(0.32 + rnd() * 0.42, 0.06 + rnd() * 0.08, 0.22 + rnd() * 0.38),
+    );
+    pickleweed.setMatrixAt(pickleCount, matrix);
+    pickleweed.setColorAt(pickleCount, color.setHSL(0.06 + rnd() * 0.18, 0.4 + rnd() * 0.35, 0.27 + rnd() * 0.18));
+    pickleCount++;
+  }
+  pickleweed.count = pickleCount;
+  pickleweed.instanceMatrix.needsUpdate = true;
+  if (pickleweed.instanceColor) pickleweed.instanceColor.needsUpdate = true;
+  root.add(pickleweed);
+}
 
 function hillStrip(zNear: number, depth: number, x0: number, x1: number, amp: number, color: string, seed: number) {
   const pos: number[] = [];
@@ -72,6 +222,11 @@ export function buildBackdrop(scene: THREE.Scene) {
   const root = new THREE.Group();
   root.name = 'backdrop';
   scene.add(root);
+  // [realism:water]
+  const tidalProps = new THREE.Group();
+  tidalProps.position.y = conditions.level;
+  root.add(tidalProps);
+  addSystem({ update: () => (tidalProps.position.y = conditions.level) });
 
   // Santa Cruz Mountains to the south/west, East Bay hills across the Bay
   root.add(hillStrip(3600, 1800, -14000, 14000, 620, '#7d8a86', 1.7));
@@ -123,7 +278,10 @@ export function buildBackdrop(scene: THREE.Scene) {
   // marsh grass tufts along Bair Island's edge
   const tuft = new THREE.ConeGeometry(0.6, 1.3, 5);
   tuft.translate(0, 0.55, 0);
-  const tufts = new THREE.InstancedMesh(tuft, new THREE.MeshLambertMaterial({ color: '#6f7440' }), 1800);
+  // [realism:water]
+  const tuftMaterial = new THREE.MeshLambertMaterial({ color: '#6f7440' });
+  applyWindSway(tuftMaterial, { stiffness: 0.012, minY: 0 });
+  const tufts = new THREE.InstancedMesh(tuft, tuftMaterial, 1800);
   const col = new THREE.Color();
   let seed = 11;
   const rnd = () => {
@@ -143,6 +301,7 @@ export function buildBackdrop(scene: THREE.Scene) {
     tufts.setColorAt(i, col.setHSL(0.17 + rnd() * 0.06, 0.3, 0.27 + rnd() * 0.1));
   }
   root.add(tufts);
+  addMarshPlants(root, rnd, m, col);
 
   // marina masts downstream on the south bank
   const mastGeo = new THREE.CylinderGeometry(0.06, 0.09, 1, 6);
@@ -159,7 +318,8 @@ export function buildBackdrop(scene: THREE.Scene) {
     m.makeTranslation(x, 0.2, z);
     hulls.setMatrixAt(i, m);
   }
-  root.add(masts, hulls);
+  // [realism:water]
+  tidalProps.add(masts, hulls);
 
   // Port of Redwood City: warehouses, cranes, salt pile
   const ware = new THREE.MeshLambertMaterial({ color: '#b9b4aa' });
@@ -199,6 +359,7 @@ export function buildBackdrop(scene: THREE.Scene) {
       buoys.setMatrixAt(i * 2 + s, m);
     }
   });
-  root.add(buoys);
+  // [realism:water]
+  tidalProps.add(buoys);
   return root;
 }

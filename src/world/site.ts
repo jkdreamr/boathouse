@@ -1,15 +1,19 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { boxMeters, textTexture } from '../textures';
 import { hullGeometry } from '../rowing/hull';
-import { addDynamicFlatFloor, addDynamicRamp, addFlatFloor, addWall } from './collide';
+import { addDynamicFlatFloor, addFlatFloor, addWall, floors } from './collide';
 import { mesh } from './build';
 import { mats } from './materials';
 import { PAD, PAD_Y } from './terrain';
-import { conditions } from '../sim/conditions';
+import { conditions, KT } from '../sim/conditions';
 import { addSystem } from '../sim/systems';
+import { applyWindSway } from './props';
 
 export const DOCK_Y = 0.5;
 export const DOCK = { minX: -45, maxX: 45, minZ: -14.2, maxZ: -11 };
+// [realism:water]
+export const dockDeckY = () => DOCK_Y + conditions.level;
 /** Where the varsity eight sits alongside the dock (hull centerline). */
 export const MOORING = new THREE.Vector3(0, 0, -18);
 export const floatingDock = new THREE.Group();
@@ -92,6 +96,8 @@ function treeGeometry() {
 export function makeTrees(spots: [number, number, number, number][]) {
   const geo = treeGeometry();
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
+  // [realism:water]
+  applyWindSway(mat, { stiffness: 0.0009, minY: 0 });
   const im = new THREE.InstancedMesh(geo, mat, spots.length);
   const m = new THREE.Matrix4();
   spots.forEach(([x, y, z, s], i) => {
@@ -283,6 +289,95 @@ function msiShip() {
   return g;
 }
 
+// [realism:water]
+let pileSurfaceTexture: THREE.CanvasTexture | null = null;
+
+function pileTexture() {
+  if (pileSurfaceTexture) return pileSurfaceTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+  const py = (y: number) => ((4 - y) / 9) * canvas.height;
+  ctx.fillStyle = '#705b46';
+  ctx.fillRect(0, 0, 512, 512);
+  ctx.fillStyle = '#2c3326';
+  ctx.fillRect(0, py(-1.9), 512, 512 - py(-1.9));
+  ctx.fillStyle = '#716f63';
+  ctx.fillRect(0, py(-0.6), 512, py(-1.9) - py(-0.6));
+  const algae = ctx.createLinearGradient(0, py(0.25), 0, py(-0.6));
+  algae.addColorStop(0, '#82774f');
+  algae.addColorStop(1, '#39452c');
+  ctx.fillStyle = algae;
+  ctx.fillRect(0, py(0.25), 512, py(-0.6) - py(0.25));
+  ctx.fillStyle = '#332f25';
+  ctx.fillRect(0, py(0.4), 512, Math.max(3, py(0.25) - py(0.4)));
+
+  let seed = 719;
+  const rnd = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  for (let i = 0; i < 150; i++) {
+    const x = rnd() * 512;
+    ctx.strokeStyle = `rgba(35,25,18,${0.08 + rnd() * 0.13})`;
+    ctx.lineWidth = 1 + rnd() * 3;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.bezierCurveTo(x + rnd() * 8 - 4, 170, x + rnd() * 8 - 4, 340, x + rnd() * 8 - 4, 512);
+    ctx.stroke();
+  }
+  const speckles = (count: number, minY: number, maxY: number, colors: string[], radius: number) => {
+    for (let i = 0; i < count; i++) {
+      ctx.fillStyle = colors[Math.floor(rnd() * colors.length)];
+      ctx.beginPath();
+      ctx.arc(rnd() * 512, py(minY + rnd() * (maxY - minY)), radius * (0.45 + rnd()), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  speckles(1300, -5, -1.9, ['rgba(142,151,127,.5)', 'rgba(13,21,17,.7)', 'rgba(91,91,73,.7)'], 1.3);
+  speckles(2100, -1.9, -0.6, ['rgba(222,220,201,.88)', 'rgba(178,181,171,.9)', 'rgba(112,110,99,.8)'], 1.8);
+  speckles(520, -0.6, 0.25, ['rgba(44,57,31,.65)', 'rgba(129,119,72,.55)'], 1.5);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+  pileSurfaceTexture = texture;
+  return texture;
+}
+
+// [realism:water]
+function windsockGeometry() {
+  const length = 1.5;
+  const segments = 16;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let ring = 0; ring <= 3; ring++) {
+    const x = (length * ring) / 3;
+    const r = THREE.MathUtils.lerp(0.35, 0.15, ring / 3);
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      positions.push(x, Math.cos(a) * r, Math.sin(a) * r);
+    }
+  }
+  for (let band = 0; band < 3; band++) {
+    for (let i = 0; i < segments; i++) {
+      const a = band * segments + i;
+      const b = band * segments + ((i + 1) % segments);
+      const c = (band + 1) * segments + i;
+      const d = (band + 1) * segments + ((i + 1) % segments);
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  const bandSize = segments * 6;
+  for (let band = 0; band < 3; band++) geo.addGroup(band * bandSize, bandSize, band % 2);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export function buildSite(scene: THREE.Scene) {
   const M = mats();
   const root = new THREE.Group();
@@ -371,44 +466,98 @@ export function buildSite(scene: THREE.Scene) {
   root.add(makeTrees(treeSpots));
   for (const [x, , z] of treeSpots) addWall(x - 0.3, x + 0.3, z - 0.3, z + 0.3);
 
-  // gangway down to the floating dock
-  const gl = Math.hypot(11, PAD_Y - DOCK_Y);
-  const ga = Math.atan2(PAD_Y - DOCK_Y, 11);
+  // [realism:water]
+  const gangwayLength = 13.5;
+  let gangwayHeight = PAD_Y - (dockDeckY() + 0.26);
+  let gangwayAngle = Math.asin(THREE.MathUtils.clamp(gangwayHeight / gangwayLength, -1, 1));
+  let gangwayFootZ = 0.2 - gangwayLength * Math.cos(gangwayAngle);
   gangway.position.set(0, PAD_Y, 0.2);
-  gangway.rotation.x = -ga;
   root.add(gangway);
-  const localPosition = (x: number, y: number, z: number) => {
-    const dy = y - PAD_Y;
-    const dz = z - 0.2;
-    return new THREE.Vector3(x, dy * Math.cos(ga) - dz * Math.sin(ga), dy * Math.sin(ga) + dz * Math.cos(ga));
+  const gangwayParts: THREE.BufferGeometry[] = [];
+  const addGangwayPart = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+    const part = new THREE.BoxGeometry(w, h, d);
+    part.translate(x, y, z);
+    gangwayParts.push(part);
   };
-  const addGangwayMesh = (m: THREE.Mesh, x: number, y: number, z: number, upright = false) => {
-    m.position.copy(localPosition(x, y, z));
-    if (upright) m.rotation.x = ga;
-    gangway.add(m);
-  };
-  const gw = mesh(boxMeters(1.6, 0.1, gl), M.alu);
-  addGangwayMesh(gw, 0, (PAD_Y + DOCK_Y) / 2 - 0.02, -5.5);
-  for (const s of [-1, 1]) {
-    const rail = mesh(new THREE.BoxGeometry(0.06, 0.06, gl), M.alu);
-    addGangwayMesh(rail, s * 0.82, (PAD_Y + DOCK_Y) / 2 + 1.0, -5.5);
-    const truss = mesh(new THREE.BoxGeometry(0.04, 0.5, gl), M.alu);
-    addGangwayMesh(truss, s * 0.82, (PAD_Y + DOCK_Y) / 2 + 0.25, -5.5);
-    for (let k = 0; k <= 6; k++) {
-      const z = -11 + (11 * k) / 6;
-      const y = DOCK_Y + ((z + 11) / 11) * (PAD_Y - DOCK_Y);
-      const p = mesh(new THREE.BoxGeometry(0.05, 1.0, 0.05), M.alu);
-      addGangwayMesh(p, s * 0.82, y + 0.5, z, true);
+  addGangwayPart(1.6, 0.1, gangwayLength, 0, -0.05, -gangwayLength / 2);
+  for (const side of [-1, 1]) {
+    const x = side * 0.82;
+    addGangwayPart(0.05, 0.42, gangwayLength, x, -0.3, -gangwayLength / 2);
+    addGangwayPart(0.06, 0.06, gangwayLength, side * 0.86, 0.94, -gangwayLength / 2);
+    addGangwayPart(0.05, 0.05, gangwayLength, side * 0.86, 0.48, -gangwayLength / 2);
+    for (let k = 0; k <= 13; k++) {
+      const z = -0.2 - ((gangwayLength - 0.4) * k) / 13;
+      addGangwayPart(0.05, 0.9, 0.05, side * 0.86, 0.45, z);
     }
   }
-  addDynamicRamp(-0.8, 0.8, -11.2, 0.2, 'z', () => DOCK_Y + conditions.level, () => PAD_Y);
-  addWall(-1.0, -0.85, -11, -0.2, 0, 3);
-  addWall(0.85, 1.0, -11, -0.2, 0, 3);
+  const gangwayGeometry = mergeGeometries(gangwayParts);
+  for (const part of gangwayParts) part.dispose();
+  if (gangwayGeometry) gangway.add(mesh(gangwayGeometry, M.alu));
+  const roller = mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.7, 12), M.darkSteel);
+  roller.rotation.z = Math.PI / 2;
+  roller.position.set(0, -0.18, -gangwayLength);
+  gangway.add(roller);
+
+  const transitionPlate = mesh(new THREE.BoxGeometry(1.6, 0.05, 0.7), M.alu);
+  root.add(transitionPlate);
+  const updateGangway = () => {
+    const footTopY = dockDeckY() + 0.26;
+    const dockLevel = dockDeckY();
+    gangwayHeight = PAD_Y - footTopY;
+    gangwayAngle = Math.asin(THREE.MathUtils.clamp(gangwayHeight / gangwayLength, -1, 1));
+    const cosine = Math.cos(gangwayAngle);
+    gangwayFootZ = 0.2 - gangwayLength * cosine;
+    gangway.rotation.x = -gangwayAngle;
+    transitionPlate.position.set(0, (footTopY + dockLevel) / 2, gangwayFootZ - 0.35);
+    transitionPlate.rotation.x = Math.atan2(dockLevel - footTopY, 0.7);
+  };
+  floors.push({
+    minX: -0.8,
+    maxX: 0.8,
+    minZ: -14.2,
+    maxZ: 0.2,
+    y: (_x, z) => {
+      if (z >= gangwayFootZ) return PAD_Y - ((0.2 - z) * gangwayHeight) / (gangwayLength * Math.cos(gangwayAngle));
+      if (z >= gangwayFootZ - 0.7) {
+        const t = (z - (gangwayFootZ - 0.7)) / 0.7;
+        return dockDeckY() + 0.26 * t;
+      }
+      return dockDeckY();
+    },
+  });
+  addWall(-1.0, -0.85, -12.4, -0.2, -5, 3);
+  addWall(0.85, 1.0, -12.4, -0.2, -5, 3);
+  updateGangway();
   addSystem({
     update: () => {
-      const dockLevel = DOCK_Y + conditions.level;
-      gangway.rotation.x = -Math.asin(THREE.MathUtils.clamp((PAD_Y - dockLevel) / gl, -1, 1));
+      updateGangway();
       floatingDock.position.y = conditions.level;
+    },
+  });
+
+  const windsockPole = mesh(new THREE.CylinderGeometry(0.06, 0.09, 5, 8), M.darkSteel);
+  windsockPole.position.set(5.5, PAD_Y + 2.5, 1.0);
+  root.add(windsockPole);
+  addWall(5.35, 5.65, 0.85, 1.15, PAD_Y, PAD_Y + 5);
+  const windsockRoot = new THREE.Group();
+  windsockRoot.position.set(5.5, PAD_Y + 5, 1.0);
+  root.add(windsockRoot);
+  const windsock = new THREE.Mesh(
+    windsockGeometry(),
+    [
+      new THREE.MeshStandardMaterial({ color: '#ef6b26', roughness: 0.75, side: THREE.DoubleSide }),
+      new THREE.MeshStandardMaterial({ color: '#f4eee1', roughness: 0.8, side: THREE.DoubleSide }),
+    ],
+  );
+  windsock.castShadow = false;
+  windsock.receiveShadow = false;
+  windsockRoot.add(windsock);
+  addSystem({
+    update: (_dt, time) => {
+      const speed = conditions.wind.length();
+      windsockRoot.rotation.y = Math.atan2(-conditions.wind.y, conditions.wind.x);
+      const droop = (1 - THREE.MathUtils.clamp(speed / (15 * KT), 0, 1)) * (80 * Math.PI) / 180;
+      windsock.rotation.z = -droop + Math.sin(time * 10) * 0.035 * (0.5 + conditions.gust);
     },
   });
 
@@ -421,9 +570,8 @@ export function buildSite(scene: THREE.Scene) {
     floatingDock.add(floatBox(3, 12, fx, -20.2, M.deckGray));
     addDynamicFlatFloor(fx - 1.5, fx + 1.5, -26.2, DOCK.minZ, () => DOCK_Y + conditions.level);
   }
-  const pileMat = new THREE.MeshStandardMaterial({ color: '#4a3a30', roughness: 0.8 });
-  const capMat = M.white;
-  for (const [x, z] of [
+  // [realism:water]
+  const pileSpots: [number, number][] = [
     [-30, -14.9],
     [-10, -14.9],
     [10, -14.9],
@@ -432,14 +580,40 @@ export function buildSite(scene: THREE.Scene) {
     [30, -10.3],
     [-43, -27],
     [43, -27],
-  ]) {
-    const p = mesh(new THREE.CylinderGeometry(0.22, 0.22, 7, 12), pileMat);
-    p.position.set(x, 0.5, z);
+  ];
+  const pileMat = new THREE.MeshStandardMaterial({ map: pileTexture(), roughness: 0.86 });
+  const capMat = M.white;
+  for (const [x, z] of pileSpots) {
+    const p = mesh(new THREE.CylinderGeometry(0.22, 0.22, 9, 16, 24), pileMat);
+    p.position.set(x, -0.5, z);
     root.add(p);
     const c = mesh(new THREE.ConeGeometry(0.24, 0.3, 12), capMat);
     c.position.set(x, 4.15, z);
     root.add(c);
   }
+  const hoopGeometry = new THREE.TorusGeometry(0.34, 0.035, 8, 24);
+  hoopGeometry.rotateX(Math.PI / 2);
+  const guideHoops = new THREE.InstancedMesh(hoopGeometry, M.darkSteel, pileSpots.length);
+  const guideBrackets = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.08, 0.08), M.darkSteel, pileSpots.length);
+  const guideMatrix = new THREE.Matrix4();
+  const guidePosition = new THREE.Vector3();
+  const guideDirection = new THREE.Vector3();
+  const guideRotation = new THREE.Quaternion();
+  const guideScale = new THREE.Vector3();
+  pileSpots.forEach(([x, z], i) => {
+    guideMatrix.makeTranslation(x, DOCK_Y + 0.15, z);
+    guideHoops.setMatrixAt(i, guideMatrix);
+    const edgeX = z < -20 ? x : THREE.MathUtils.clamp(x, DOCK.minX, DOCK.maxX);
+    const edgeZ = z < -20 ? -26.2 : THREE.MathUtils.clamp(z, DOCK.minZ, DOCK.maxZ);
+    guidePosition.set((edgeX + x) / 2, DOCK_Y + 0.15, (edgeZ + z) / 2);
+    guideDirection.set(x - edgeX, 0, z - edgeZ);
+    const length = guideDirection.length();
+    guideRotation.setFromUnitVectors(new THREE.Vector3(1, 0, 0), guideDirection.normalize());
+    guideScale.set(length, 1, 1);
+    guideMatrix.compose(guidePosition, guideRotation, guideScale);
+    guideBrackets.setMatrixAt(i, guideMatrix);
+  });
+  floatingDock.add(guideHoops, guideBrackets);
   for (let i = 0; i < 6; i++) {
     const cleat = mesh(new THREE.BoxGeometry(0.3, 0.08, 0.08), M.darkSteel);
     cleat.position.set(-12 + i * 5, DOCK_Y + 0.05, DOCK.minZ + 0.2);
