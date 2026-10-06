@@ -299,7 +299,7 @@ export class CrewBoat {
       rw.seat.position.set(hx, 0.16, 0);
       const handIn = _c.set(-0.86, 0, 0).applyMatrix4(o.matrix).clone();
       const handOut = _c.set(-1.08, 0, 0).applyMatrix4(o.matrix).clone();
-      rw.figure.setPose({ seatX: rw.seatX, slide, lean, stretcherX: rw.seatX - 0.72, handIn, handOut, side: s });
+      rw.figure.setPose({ seatX: rw.seatX, slide, lean, stretcherX: rw.seatX - 0.72, handIn, handOut, side: s, feather });
     }
   }
 
