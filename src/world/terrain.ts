@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { conditions, setChannel } from '../sim/conditions';
+import { addSystem } from '../sim/systems';
 
 function hash(x: number, y: number) {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
@@ -65,26 +67,44 @@ export function channelDepthDist(x: number, z: number) {
   return Math.min(zs - z, z - zn);
 }
 
+// [realism:water]
+setChannel({ depthDist: channelDepthDist, centerline });
+
 export function terrainHeight(x: number, z: number) {
   const zs = southBank(x);
   const zn = zs - channelWidth(x);
+  let natural: number;
+  // [realism:water]
   if (z <= zs && z >= zn) {
     const inner = Math.min(zs - z, z - zn);
-    return -0.35 - 2.6 * smooth(0, 30, inner);
+    const ripple = (fbm(x * 0.11, z * 0.11) - 0.5) * 0.16 * (1 - smooth(22, 26, inner));
+    natural = 0.35 - 0.85 * smooth(0, 3, inner) - 1.5 * THREE.MathUtils.clamp((inner - 3) / 19, 0, 1) - 2.8 * smooth(22, 55, inner) + ripple;
+  } else {
+    const north = z < zn;
+    const d = north ? zn - z : z - zs;
+    if (d < 6) natural = 0.35 + 0.2 * smooth(0, 6, d);
+    else {
+      const n = fbm(x * 0.012, z * 0.012);
+      if (north) natural = 0.3 + 0.25 * smooth(6, 40, d) + (n - 0.5) * 0.3;
+      else if (x > PAD.minX - 2 && x < PAD.maxX + 2 && z < PAD.maxZ + 2) natural = PAD_Y - 0.3;
+      else natural = 0.3 + 0.7 * smooth(6, 60, d) + (n - 0.5) * 0.35;
+    }
   }
-  const north = z < zn;
-  const d = north ? zn - z : z - zs;
-  if (d < 6) return -0.35 + (d / 6) * 0.65;
-  const n = fbm(x * 0.012, z * 0.012);
-  if (north) return 0.3 + 0.25 * smooth(6, 40, d) + (n - 0.5) * 0.3;
-  if (x > PAD.minX - 2 && x < PAD.maxX + 2 && z < PAD.maxZ + 2) return PAD_Y - 0.3;
-  return 0.3 + 0.7 * smooth(6, 60, d) + (n - 0.5) * 0.35;
+  const xWeight = x < -60 ? smooth(-75, -60, x) : x > 105 ? 1 - smooth(105, 120, x) : 1;
+  const zWeight = z > 0 ? 0 : z < -36 ? smooth(-48, -36, z) : 1;
+  const basinWeight = xWeight * zWeight;
+  if (basinWeight <= 0) return natural;
+  const basin = z > -9 ? -1 - 2.8 * smooth(0, 9, -z) : -3.9;
+  return THREE.MathUtils.lerp(natural, Math.min(natural, basin), basinWeight);
 }
 
+// [realism:water]
 function rows(): number[] {
   const out: number[] = [];
   for (let z = -2400; z < -460; z += 40) out.push(z);
-  for (let z = -460; z < 200; z += 4) out.push(z);
+  for (let z = -460; z < -60; z += 4) out.push(z);
+  for (let z = -60; z <= 10; z += 2) out.push(z);
+  for (let z = 12; z < 200; z += 4) out.push(z);
   for (let z = 200; z <= 1800; z += 40) out.push(z);
   return out;
 }
@@ -99,7 +119,7 @@ export function buildTerrain() {
   const col = new Float32Array(nx * nz * 3);
   const c = new THREE.Color();
   const water = new THREE.Color('#3a3a2d');
-  const mud = new THREE.Color('#5b5243');
+  const mud = new THREE.Color('#4f473a');
   const marshA = new THREE.Color('#5c6a37');
   const marshB = new THREE.Color('#7b6b45');
   const marshC = new THREE.Color('#6e4a3a');
@@ -115,8 +135,10 @@ export function buildTerrain() {
       pos[p + 1] = h;
       pos[p + 2] = z;
       const dIn = channelDepthDist(x, z);
-      if (dIn > 0) c.copy(water);
-      else if (dIn > -5) c.copy(mud).lerp(marshA, 0.15);
+      if (dIn >= 0 && dIn < 4 && h > -0.9) {
+        c.copy(marshA).lerp(marshB, 0.2 + fbm(x * 0.07, z * 0.07) * 0.25);
+      } else if (h < -2.8) c.copy(water);
+      else if (h <= 0.25) c.copy(mud).multiplyScalar(0.88 + fbm(x * 0.09 + 5, z * 0.09) * 0.24);
       else {
         const north = z < southBank(x) - channelWidth(x);
         const n1 = fbm(x * 0.008 + 3, z * 0.008);
@@ -149,6 +171,51 @@ export function buildTerrain() {
   geo.setIndex(idx);
   geo.computeVertexNormals();
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  // [realism:water]
+  const wetMudUniforms = { uLevel: { value: conditions.level } };
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uLevel = wetMudUniforms.uLevel;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTerrainWorldPosition;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uLevel;
+varying vec3 vTerrainWorldPosition;
+float realismHash(vec2 p) {
+  p = fract(p * vec2(123.34, 345.45));
+  p += dot(p, p + 34.345);
+  return fract(p.x * p.y);
+}
+float realismNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(realismHash(i), realismHash(i + vec2(1.0, 0.0)), f.x),
+    mix(realismHash(i + vec2(0.0, 1.0)), realismHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+float realismIntertidal = 1.0 - smoothstep(0.2, 0.45, vTerrainWorldPosition.y);
+float realismWet = 1.0 - smoothstep(uLevel + 0.05, uLevel + 0.6, vTerrainWorldPosition.y);
+float realismPuddles = realismIntertidal * (1.0 - realismWet) *
+  smoothstep(0.56, 0.82, realismNoise(vTerrainWorldPosition.xz / 3.0));
+diffuseColor.rgb *= 1.0 - 0.28 * realismWet * realismIntertidal;`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+roughnessFactor = mix(roughnessFactor, 0.3, realismIntertidal);
+roughnessFactor = mix(roughnessFactor, 0.08, realismWet * realismIntertidal);
+roughnessFactor = mix(roughnessFactor, 0.04, realismPuddles);`,
+      );
+  };
+  mat.customProgramCacheKey = () => 'realism-water-terrain';
+  addSystem({ update: () => (wetMudUniforms.uLevel.value = conditions.level) });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
