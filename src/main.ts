@@ -15,6 +15,8 @@ import { buildTerrain, centerline, channelDepthDist, PAD_Y, terrainHeight } from
 // [realism:interior]
 import { interiorLabel } from './world/interior';
 import { Handling } from './world/handling'; // [realism:handling]
+// [realism:traffic]
+import { initTraffic } from './world/traffic';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -43,6 +45,8 @@ eight.onCatch = () => sound.catch();
 eight.onFinish = () => sound.finish();
 
 const player = new Player(camera);
+// [realism:traffic]
+initTraffic(scene, () => eight, camera);
 // [realism:water]
 const spawn = () => player.place(9, dockDeckY(), DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
 spawn();
