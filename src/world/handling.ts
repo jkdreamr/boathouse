@@ -102,7 +102,6 @@ type Phase =
   | 'u_oarCarry'
   | 'u_waists'
   | 'u_over'
-  | 'u_swing'
   | 'walkIn'
   | 'u_shoulders'
   | 'u_down'
@@ -120,7 +119,6 @@ const ANIMS = new Set<Phase>([
   'u_oarCarry',
   'u_waists',
   'u_over',
-  'u_swing',
   'u_shoulders',
   'u_down',
   'u_rack',
@@ -170,6 +168,7 @@ export class Handling {
   private handA = new THREE.Vector3();
   private handB = new THREE.Vector3();
   private lastHit = '';
+  private letGoN = 0;
 
   constructor(h: HandlingHooks) {
     this.h = h;
@@ -265,7 +264,10 @@ export class Handling {
       roll: this.pose.roll,
       lift: this.carryH,
       hit: this.lastHit,
+      chord: Math.hypot(this.leadTip.x - this.tailTip.x, this.leadTip.y - this.tailTip.y),
+      letGo: this.letGoN,
       player: [this.h.player.pos.x, this.h.player.pos.y, this.h.player.pos.z],
+      crew: this.crew.map((c) => ({ k: c.k, x: +c.pos.x.toFixed(2), y: +c.pos.y.toFixed(2), z: +c.pos.z.toFixed(2), v: c.fig.group.visible })),
       slots: rackSlots.map((s) => ({ name: s.name, x: s.pos.x, y: s.pos.y, visible: s.mesh?.visible ?? null })),
     };
   }
@@ -275,14 +277,14 @@ export class Handling {
     if (this.pendingPrompt) return this.pendingPrompt;
     if (this.active) return null;
     const s = this.nearSlot();
-    if (s) return `<kbd>E</kbd> Hands on — ${s.name} (8+)`;
+    if (s) return `Press E: Hands on — ${s.name} (8+)`;
     return null;
   }
 
   rowPrompt(): string | null {
     if (this.h.mode() !== 'row') return null;
     if (this.pendingPrompt) return this.pendingPrompt;
-    return this.dockEligible() ? '<kbd>E</kbd> Weigh enough, dock it' : null;
+    return this.dockEligible() ? 'Press E: Weigh enough, dock it' : null;
   }
 
   next(): boolean {
@@ -308,7 +310,7 @@ export class Handling {
   private callout(call: string) {
     const el = document.getElementById('callout');
     if (!el) return;
-    el.innerHTML = `<span class="cox">COX</span> &ldquo;${call}&rdquo;`;
+    el.innerHTML = `<span class="cox">Cox:</span> &ldquo;${call}&rdquo;`;
     el.classList.remove('hidden');
     this.callT = 3.5;
   }
@@ -323,7 +325,7 @@ export class Handling {
 
   private waitE(prompt: string, label: string, sub: string) {
     this.sub = sub;
-    this.pendingPrompt = `<kbd>E</kbd> ${prompt}`;
+    this.pendingPrompt = `Press E: ${prompt}`;
     this.btnLabel = label;
     this.t = 0;
     this.dur = Infinity; // wait for E; do not re-fire phaseDone
@@ -429,6 +431,12 @@ export class Handling {
       _v2.set(lx, -SPEC.draft, 0).applyMatrix4(m);
       const y0 = Math.min(_v1.y, _v2.y) - 0.05;
       const y1 = Math.max(_v1.y, _v2.y) + 0.05;
+      // gangway rails are only ~1.05 m above the ramp deck: a hull carried
+      // overhead may pass over them while in the gangway footprint
+      if (Math.abs(_v1.x) <= 1.1 + r && _v1.z >= -11.2 && _v1.z <= 0.4) {
+        const deck = DOCK_Y + conditions.level + (Y0 - (DOCK_Y + conditions.level)) * ((_v1.z + 11.2) / 11.4);
+        if (Math.min(_v1.y, _v2.y) > deck + 1.1) continue;
+      }
       if (hitsWall(_v1.x, _v1.z, r, y0, y1)) {
         this.lastHit = `st${i} ${_v1.x.toFixed(1)},${_v1.z.toFixed(1)}`;
         return true;
@@ -482,18 +490,49 @@ export class Handling {
     this.trailN--;
   }
 
+  // Rigid follower ("tractor-trailer"): lead tip A = trail point 0.8 m behind
+  // the player; tail B = first trail point ≥ shell length away in a straight
+  // line (interpolated to exactly |A-B| = length). Both ends stay on the
+  // walked path; the chord cuts corners over open water.
   private hullFromTrail() {
     this.trailAt(0.8, _v1);
-    this.trailAt(0.8 + SPEC.length, _v2);
     this.leadTip.set(_v1.x, _v1.z);
+    const ax = _v1.x;
+    const az = _v1.z;
+    const L = this.trail.length;
+    let found = false;
+    for (let i = this.trailN - 1; i >= 0; i--) {
+      const s = this.trail[(this.trailHead - this.trailN + i + L * 2) % L];
+      const d = Math.hypot(s.x - ax, s.z - az);
+      if (d >= SPEC.length) {
+        const n = this.trail[(this.trailHead - this.trailN + i + 1 + L * 2) % L];
+        const dn = i + 1 <= this.trailN - 1 ? Math.hypot(n.x - ax, n.z - az) : 0;
+        const t = d === dn ? 0 : Math.min(1, Math.max(0, (SPEC.length - dn) / (d - dn)));
+        _v2.copy(n).lerp(s, t);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // trail too short: extrapolate along the oldest segment direction
+      const old = this.trail[(this.trailHead - this.trailN + L * 2) % L];
+      const nxt = this.trail[(this.trailHead - this.trailN + 1 + L * 2) % L];
+      let dx = old.x - nxt.x;
+      let dz = old.z - nxt.z;
+      const l = Math.hypot(dx, dz) || 1;
+      dx /= l;
+      dz /= l;
+      const need = SPEC.length - Math.hypot(old.x - ax, old.z - az);
+      _v2.set(old.x + dx * Math.max(0, need), 0, old.z + dz * Math.max(0, need));
+    }
     this.tailTip.set(_v2.x, _v2.z);
-    const dx = (_v1.x - _v2.x) / (SPEC.length || 1);
-    const dz = (_v1.z - _v2.z) / (SPEC.length || 1);
+    const dx = _v1.x - _v2.x;
+    const dz = _v1.z - _v2.z;
     const l = Math.hypot(dx, dz) || 1;
     this.leadDir.set(dx / l, dz / l);
     const b = this.leadIsBow ? 1 : -1;
     const heading = Math.atan2(-(dz / l) * b, (dx / l) * b);
-    this.setPose(_v1.x - (dx / l) * HL, _v1.z - (dz / l) * HL, heading, this.pose.roll, this.carryH);
+    this.setPose((_v1.x + _v2.x) / 2, (_v1.z + _v2.z) / 2, heading, this.pose.roll, this.carryH);
   }
 
   private initTrail() {
@@ -559,6 +598,7 @@ export class Handling {
       return;
     }
     const tryPose = (nx: number, nz: number) => {
+      if (!this.walkable(nx, nz, prev.y)) return false;
       p.x = nx;
       p.z = nz;
       const pushed = this.trailPush(p);
@@ -616,6 +656,10 @@ export class Handling {
       c.fig.group.visible = true;
     }
     this.stowed = true;
+    // place the cox (player) in the aisle 1.2 m beyond the lead end, facing the crew
+    const lx = Math.cos(s.heading);
+    const lz = -Math.sin(s.heading);
+    this.h.player.place(this.aisleX, Y0, s.pos.z + lz * (HL + 1.2), Math.atan2(lx, lz), -0.05);
     this.phase = 'handsOn';
     this.sub = '';
     this.t = 0;
@@ -663,9 +707,12 @@ export class Handling {
     this.phase = 'u_approach';
     this.sub = '';
     this.t = 0;
-    this.dur = 2.5;
+    // glide to one side of the gangway so the swung-up boat lies along the dock
+    const tx = Math.sign(e.group.position.x || 1) * Math.max(Math.abs(e.group.position.x), 10.3);
+    const dist = Math.hypot(tx - e.group.position.x, DOCK.minZ - 1.05 - e.group.position.z);
+    this.dur = Math.max(2.5, dist / 1.2);
     Object.assign(this.from, { cx: e.group.position.x, cz: e.group.position.z, heading: e.heading, roll: 0, lift: 0, yO: conditions.level });
-    Object.assign(this.to, { cx: e.group.position.x, cz: DOCK.minZ - 1.05, heading: snap, roll: 0, lift: 0, yO: conditions.level });
+    Object.assign(this.to, { cx: tx, cz: DOCK.minZ - 1.05, heading: snap, roll: 0, lift: 0, yO: conditions.level });
     this.pendingPrompt = null;
   }
 
@@ -933,7 +980,6 @@ export class Handling {
       case 'downIn':
       case 'u_waists':
       case 'u_over':
-      case 'u_swing':
       case 'u_shoulders':
       case 'u_down':
       case 'u_rack':
@@ -1026,23 +1072,15 @@ export class Handling {
         this.carryH = OVERHEAD;
         this.split = false;
         this.shouldersIn = false;
-        // swing the lifted shell perpendicular to the dock, aimed up the ramp;
-        // a rigid hull cannot pivot through the gangway walls under player control
+        // lead end = the end nearer the gangway foot (smaller |x|)
         const bx = Math.cos(this.pose.heading) * HL;
         this.leadIsBow = Math.abs(this.pose.cx + bx) <= Math.abs(this.pose.cx - bx);
-        this.snapFrom();
-        Object.assign(this.to, this.pose, { cx: 0, heading: this.leadIsBow ? -Math.PI / 2 : Math.PI / 2 });
-        this.t = 0;
-        this.dur = 2.6;
-        this.phase = 'u_swing';
-        break;
-      }
-      case 'u_swing':
         this.phase = 'walkIn';
         this.sub = 'overIn';
         this.pendingPrompt = null;
         this.initTrail();
         break;
+      }
       case 'u_shoulders':
         this.carryH = SHOULDER;
         this.shouldersIn = true;
@@ -1081,14 +1119,7 @@ export class Handling {
           this.waitE('Overheads', 'Overheads', 'waitOverhead');
         }
       }
-      const pp = this.h.player.pos;
-      const playerOnDock = pp.z > DOCK.minZ && pp.z < DOCK.maxZ && pp.x > DOCK.minX && pp.x < DOCK.maxX;
-      // spec gate is all-9-stations aligned; also allow toes-at-edge with the lead
-      // over the dock edge — the roll anim swings the hull out to parallel
-      if (
-        (this.sub === 'waitShoulder' || this.sub === 'waitOverhead' || this.sub === 'waist') &&
-        (this.onDock() || (playerOnDock && this.leadTip.y < DOCK.maxZ - 0.5))
-      ) {
+      if ((this.sub === 'waitShoulder' || this.sub === 'waitOverhead' || this.sub === 'waist') && this.onDock()) {
         this.waitE('Roll it to waists', 'Roll it to waists', 'waitRoll');
       }
     } else if (this.phase === 'walkIn') {
@@ -1118,6 +1149,27 @@ export class Handling {
 
   // ---------- crew ----------
 
+  // same rule as Player.ground: a floor, or land above the waterline
+  private walkable(x: number, z: number, refY: number) {
+    return floorAt(x, z, refY + 0.6) !== null || terrainHeight(x, z) > 0.05;
+  }
+
+  private nearestWalkableTrailPoint(tx: number, tz: number, refY: number, out: THREE.Vector3) {
+    let best = Infinity;
+    const L = this.trail.length;
+    out.copy(this.h.player.pos); // player position is walkable by definition
+    for (let i = 0; i < this.trailN; i++) {
+      const s = this.trail[(this.trailHead - this.trailN + i + L) % L];
+      if (!this.walkable(s.x, s.z, refY)) continue;
+      const d = (s.x - tx) * (s.x - tx) + (s.z - tz) * (s.z - tz);
+      if (d < best) {
+        best = d;
+        out.copy(s);
+      }
+    }
+    return out;
+  }
+
   private stationWorld(c: CrewState, side: number, off: number, out: THREE.Vector3) {
     const p = this.pose;
     const dx = Math.cos(p.heading);
@@ -1143,6 +1195,7 @@ export class Handling {
       return;
     }
     const walking = (this.phase === 'walkOut' && WALK_OUT_SUBS.has(this.sub)) || (this.phase === 'walkIn' && WALK_IN_SUBS.has(this.sub));
+    this.letGoN = 0;
     for (const c of this.crew) {
       if (!c.fig.group.visible) continue;
       let tx = c.pos.x;
@@ -1213,12 +1266,22 @@ export class Handling {
         else if (lift >= SHOULDER - 0.01) off = halfBeam(SPEC, c.seatX) + 0.16;
         else off = halfBeam(SPEC, c.seatX) + 0.32;
         this.stationWorld(c, side, off, _v3);
+        // a rower whose station hangs over the creek lets go and walks
+        // the nearest walkable point of the hull's path instead
+        const holding = !walking || this.walkable(_v3.x, _v3.z, c.pos.y);
+        if (!holding) {
+          this.nearestWalkableTrailPoint(_v3.x, _v3.z, c.pos.y, _v3);
+          this.letGoN++;
+        }
         tx = _v3.x;
         tz = _v3.z;
         const hx = this.pose.cx + Math.cos(this.pose.heading) * c.seatX;
         const hz = this.pose.cz - Math.sin(this.pose.heading) * c.seatX;
         yaw = walking ? Math.atan2(this.leadDir.x, this.leadDir.y) : Math.atan2(hx - tx, hz - tz);
-        if (lift >= OVERHEAD - 0.01) {
+        if (!holding) {
+          handL = null;
+          handR = null;
+        } else if (lift >= OVERHEAD - 0.01) {
           handL = this.gunwaleWorld(c.seatX, 1, this.handA);
           handR = this.gunwaleWorld(c.seatX, -1, this.handB);
         } else {
@@ -1237,7 +1300,9 @@ export class Handling {
         c.pos.z += (dz / d) * step;
         moving = Math.min(1, step / dt / 1.4);
       }
-      c.pos.y = groundAt(c.pos.x, c.pos.z, c.pos.y + 0.5);
+      // generous refY: a rower who dips below a floor (dock edge, ramp)
+      // must be able to step back up onto it instead of sinking through
+      c.pos.y = groundAt(c.pos.x, c.pos.z, Math.max(c.pos.y + 0.6, DOCK_Y + conditions.level + 1.2));
       c.walkPhase += (Math.hypot(c.pos.x - c.prev.x, c.pos.z - c.prev.z) / 0.64) * Math.PI;
       c.prev.copy(c.pos);
       c.walkAmt = lerp(c.walkAmt, moving, Math.min(1, dt * 8));
