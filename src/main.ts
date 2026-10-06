@@ -11,6 +11,8 @@ import { Environment, PRESETS } from './world/env';
 import { buildBackdrop } from './world/props';
 import { buildSite, DOCK, DOCK_Y, MOORING } from './world/site';
 import { buildTerrain, PAD_Y } from './world/terrain';
+// [realism:interior]
+import { interiorLabel } from './world/interior';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -218,6 +220,9 @@ window.addEventListener('resize', () => {
 
 function whereLabel() {
   const p = player.pos;
+  // [realism:interior]
+  const room = interiorLabel(p.x, p.y, p.z);
+  if (room) return room;
   if (p.y > BALCONY_Y - 0.3 && p.z < 12.2) return 'Balcony';
   if (p.y > PAD_Y + 0.4) return 'Stairs';
   if (p.x > -24 && p.x < 24 && p.z > 12 && p.z < 34) return 'Boat bays';

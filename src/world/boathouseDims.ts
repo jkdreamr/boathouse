@@ -15,9 +15,11 @@ export const RIDGE_Z = (ZW + ZF) / 2;
 export const RIDGE_Y = EAVE + (RIDGE_Z - ZW) * SLOPE;
 export const BALCONY_Y = Y0 + CMU_H;
 
+// [realism:interior] five 4.0 m bay doors (matches the exterior engineer's layout)
 export const BAYS = [
-  { x: -17, open: false },
-  { x: -8, open: true },
-  { x: 1, open: true },
-  { x: 10, open: false },
+  { x: -19.2, open: true },
+  { x: -9.6, open: true },
+  { x: 0, open: true },
+  { x: 9.6, open: true },
+  { x: 19.2, open: true },
 ];
