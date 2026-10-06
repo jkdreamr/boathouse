@@ -539,6 +539,7 @@ export class CrewBoat {
       rower.pose.slide = rower.slide;
       rower.pose.lean = rower.lean;
       rower.pose.stretcherX = rower.seatX - 0.72;
+      rower.pose.feather = Math.min(1, rower.feather);
       rower.figure.setPose(rower.pose);
     }
   }
