@@ -115,6 +115,24 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   position: fixed; top: 128px; left: 50%; transform: translateX(-50%); background: var(--panel);
   border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; font-size: 14px; backdrop-filter: blur(10px);
 }
+/* [realism:handling] */
+#callout {
+  position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 16px; font-size: 15px; pointer-events: none; backdrop-filter: blur(10px);
+  font-style: italic;
+}
+#callout .cox {
+  font-style: normal; font-weight: 600; font-size: 13px;
+  color: #e7b4ad; margin-right: 6px;
+}
+#callBtn {
+  position: fixed; left: 50%; bottom: 116px; transform: translateX(-50%);
+  background: var(--cardinal); border-color: rgba(255, 255, 255, 0.3); font-weight: 700;
+  pointer-events: auto;
+}
+#callBtn:hover { background: #a51c1c; }
+
 body.row #reticle { display: none; }
 body.row #help { bottom: auto; top: 64px; }
 @media (max-width: 640px) {

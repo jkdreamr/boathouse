@@ -14,6 +14,7 @@ import { buildSite, dockDeckY, DOCK, gangway, MOORING } from './world/site';
 import { buildTerrain, centerline, channelDepthDist, PAD_Y, terrainHeight } from './world/terrain';
 // [realism:interior]
 import { interiorLabel } from './world/interior';
+import { Handling } from './world/handling'; // [realism:handling]
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -45,6 +46,20 @@ const player = new Player(camera);
 // [realism:water]
 const spawn = () => player.place(9, dockDeckY(), DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
 spawn();
+// [realism:handling] boat carrying crew: rack -> launch -> board, and dock -> rack
+const handling = new Handling({
+  scene,
+  camera,
+  player,
+  eight,
+  mode: () => mode,
+  boardInPlace: () => board(true),
+  enterWalk: () => {
+    mode = 'walk';
+    keys.clear();
+    syncUI();
+  },
+});
 
 type Mode = 'intro' | 'walk' | 'row';
 let mode: Mode = 'intro';
@@ -75,6 +90,7 @@ function lock() {
 }
 
 function nearBoat() {
+  if (handling.active || handling.stowed) return false; // [realism:handling]
   const p = player.pos;
   return p.y < dockDeckY() + 0.3 && p.y > dockDeckY() - 0.3 && p.z < DOCK.minZ + 1.8 && Math.abs(p.x - eight.x) < 9.5; // [realism:water]
 }
@@ -100,8 +116,8 @@ function syncUI() {
   setHelp();
 }
 
-// [realism:stroke]
-function board() {
+// [realism:stroke] [realism:handling]
+function board(inPlace = false) {
   mode = 'row';
   chase = false;
   coxYaw = 0;
@@ -109,7 +125,7 @@ function board() {
   lastTap = -Infinity;
   wasAground = false;
   if (locked()) document.exitPointerLock();
-  eight.reset(MOORING, 0);
+  if (!inPlace) eight.reset(MOORING, 0); // [realism:handling]
   sound.start();
   syncUI();
   toast('You’re in the cox seat. Press Space or STROKE to row.', 4);
@@ -125,6 +141,7 @@ function toWalk() {
 }
 
 function goDock() {
+  if (handling.active) return; // [realism:handling]
   if (mode === 'row') return toWalk();
   player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.12); // [realism:water]
   toast('Launch dock. Walk up to the eight and press E.');
@@ -218,7 +235,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyT') cycleTod();
   if (e.code === 'KeyM') toggleSound();
   if (mode === 'walk') {
-    if (e.code === 'KeyE' && nearBoat()) board();
+    if (e.code === 'KeyE') {
+      if (!handling.next() && nearBoat()) board(); // [realism:handling]
+    }
     if (e.code === 'Space') e.preventDefault();
   } else if (mode === 'row') {
     if (e.code === 'Space') {
@@ -230,6 +249,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Digit2') setPressure(1);
     if (e.code === 'Digit3') setPressure(2);
     if (e.code === 'KeyR' && !e.repeat) eight.backStroke();
+    if (e.code === 'KeyE') handling.dock(); // [realism:handling]
     if (e.code === 'Escape' && !locked()) toWalk();
   }
 });
@@ -263,6 +283,7 @@ const fmtSplit = (v: number) => {
 const clock = new THREE.Clock();
 const focus = new THREE.Vector3();
 const dir = new THREE.Vector3();
+const _prev = new THREE.Vector3(); // [realism:handling]
 let time = 0;
 let hudTimer = 0;
 
@@ -289,7 +310,9 @@ function frame() {
     eight.moored = moored;
     eight.update(dt, 0, time);
     if (mode === 'walk') {
+      _prev.copy(player.pos); // [realism:handling]
       const fell = player.update(dt, locked() ? keys : none);
+      handling.constrain(_prev, dt); // [realism:handling]
       if (fell && player.pos.y < conditions.level - 0.4) {
         player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.1);
         toast('Splash! Back on the dock.');
@@ -324,10 +347,16 @@ function frame() {
       }
     } else if (mode === 'walk') {
       $('where').textContent = whereLabel();
-      const show = locked() && nearBoat();
+      const hp = handling.prompt(); // [realism:handling]
+      const show = locked() && (hp !== null || nearBoat());
       const pr = $('prompt');
       pr.classList.toggle('hidden', !show);
-      if (show) pr.innerHTML = '<kbd>E</kbd> or click: cox the varsity 8+';
+      if (show) pr.innerHTML = hp ?? '<kbd>E</kbd> or click: cox the varsity 8+'; // [realism:handling]
+    } else {
+      const rp = handling.rowPrompt(); // [realism:handling]
+      const pr = $('prompt');
+      pr.classList.toggle('hidden', rp === null);
+      if (rp !== null) pr.innerHTML = rp;
     }
   }
   if (toastTimer > 0) {
@@ -362,5 +391,6 @@ Object.assign(window, {
     goDock,
     strokeUI,
     setPressure,
+    handling, // [realism:handling]
   },
 });
