@@ -156,12 +156,13 @@ export class Dinghy extends Craft {
     this.group.add(this.jibG);
     // Centreboard and rudder.
     const blade = std('#e6e4dc', 0.4);
-    const cb = addMesh(this.group, new THREE.BoxGeometry(0.38, 1.0, 0.02), blade);
-    cb.position.set(0.15, -0.55, 0);
+    // Redwood Creek is turbid: model only the top of each blade, just under the surface.
+    const cb = addMesh(this.group, new THREE.BoxGeometry(0.38, 0.3, 0.02), blade);
+    cb.position.set(0.15, -0.12, 0);
     this.rudder = new THREE.Group();
     this.rudder.position.set(-L.length / 2 - 0.02, 0.3, 0);
-    const rb = addMesh(this.rudder, new THREE.BoxGeometry(0.28, 1.05, 0.025), blade);
-    rb.position.set(-0.1, -0.35, 0);
+    const rb = addMesh(this.rudder, new THREE.BoxGeometry(0.28, 0.5, 0.025), blade);
+    rb.position.set(-0.1, -0.1, 0);
     this.group.add(this.rudder);
     this.detail.push(cb, window_);
     const tops = ['#2e2d29', '#8c1515', '#f4f2ec', '#3d5a80', '#5a5f66'];
