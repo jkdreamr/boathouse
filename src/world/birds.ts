@@ -282,7 +282,7 @@ class Bird {
     const rate = clamp(wrap(yawGoal - this.yaw) * 1.6, -turn, turn);
     this.yaw = wrap(this.yaw + rate * dt);
     this.air = damp(this.air, speed, 1.2, dt);
-    const gust = (1 + conditions.gust) * Math.hypot(_w.x, _w.y);
+    const gust = Math.hypot(_w.x, _w.y); // conditions.wind already includes gusts
     const chop = gust * 0.025 * Math.sin(this.t * 2.3 + this.phase) * Math.sin(this.t * 0.9 + 1.7);
     this.bank = damp(this.bank, clamp(-Math.atan((this.air * rate) / G), -0.85, 0.85) + chop, 4, dt);
     this.v.y = damp(this.v.y, clamp((ty - this.p.y) * 0.9, -climb * 1.4, climb), 2.5, dt);

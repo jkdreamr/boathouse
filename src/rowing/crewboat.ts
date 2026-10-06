@@ -3,6 +3,7 @@ import { blobTexture, ringTexture, textTexture } from '../textures';
 import { between } from '../world/build';
 import { conditions } from '../sim/conditions';
 import { terrainHeight } from '../world/terrain';
+import { DOCK } from '../world/site';
 import { deckGeometry, EIGHT, FOUR, gunwaleY, halfBeam, hullGeometry, HullSpec, PAIR } from './hull';
 import { BLADE_CENTER, makeOarMesh } from './oar';
 import { Coxswain } from './cox';
@@ -74,10 +75,16 @@ interface Fx {
 }
 
 const HULL_DATA = {
-  '8+': { shell: 96, rowers: 8, cox: 55, drag: 12.7, rudderDrag: 30, cdAf: 2, cdAs: 9, iz: 15000, cr: 1900, cr0: 400, crRudder: 16, lr: 8, windArm: 1.2, cl2: 1300, cl1: 300 },
-  '4+': { shell: 51, rowers: 4, cox: 55, drag: 8.4, rudderDrag: 20, cdAf: 1.2, cdAs: 6, iz: 5500, cr: 1000, cr0: 0, crRudder: 12.8, lr: 6, windArm: 0.9, cl2: 1300, cl1: 300 },
-  '2-': { shell: 27, rowers: 2, cox: 0, drag: 4.9, rudderDrag: 12, cdAf: 0.7, cdAs: 3.5, iz: 1800, cr: 500, cr0: 0, crRudder: 9.6, lr: 4.6, windArm: 0.7, cl2: 1300, cl1: 300 },
+  '8+': { shell: 96, rowers: 8, cox: 55, drag: 12.7, rudderDrag: 30, cdAf: 2, cdAs: 9, iz: 15000, cr: 3000, cr0: 400, crRudder: 34, lr: 8, windArm: 1.2, cl2: 1300, cl1: 300 },
+  '4+': { shell: 51, rowers: 4, cox: 55, drag: 8.4, rudderDrag: 20, cdAf: 1.2, cdAs: 6, iz: 5500, cr: 1600, cr0: 0, crRudder: 27, lr: 6, windArm: 0.9, cl2: 1300, cl1: 300 },
+  '2-': { shell: 27, rowers: 2, cox: 0, drag: 4.9, rudderDrag: 12, cdAf: 0.7, cdAs: 3.5, iz: 1800, cr: 800, cr0: 0, crRudder: 20, lr: 4.6, windArm: 0.7, cl2: 1300, cl1: 300 },
 } as const;
+
+/** Shoal or the floating dock's hull footprint (the shell can't pass through the pontoons). */
+function blocked(x: number, z: number) {
+  if (x > DOCK.minX - 0.2 && x < DOCK.maxX + 0.2 && z > DOCK.minZ - 0.2 && z < DOCK.maxZ) return true;
+  return terrainHeight(x, z) > conditions.level - 0.3;
+}
 
 export class CrewBoat {
   readonly group = new THREE.Group();
@@ -610,9 +617,9 @@ export class CrewBoat {
     const sternX = this.group.position.x - c * (this.hullSpec.length / 2 - 0.3);
     const sternZ = this.group.position.z + s * (this.hullSpec.length / 2 - 0.3);
     let points = 0;
-    if (terrainHeight(bowX, bowZ) > conditions.level - 0.3) points |= 1;
-    if (terrainHeight(this.group.position.x, this.group.position.z) > conditions.level - 0.3) points |= 2;
-    if (terrainHeight(sternX, sternZ) > conditions.level - 0.3) points |= 4;
+    if (blocked(bowX, bowZ)) points |= 1;
+    if (blocked(this.group.position.x, this.group.position.z)) points |= 2;
+    if (blocked(sternX, sternZ)) points |= 4;
     const aground = points !== 0;
     if (aground && !this.wasAground) {
       this.momentum = this.rowerMass * this.crewSpeed;
@@ -665,7 +672,8 @@ export class CrewBoat {
     const heading = this.heading;
     _fwd.set(Math.cos(heading), 0, -Math.sin(heading));
     _stbd.set(Math.sin(heading), 0, Math.cos(heading));
-    _wind.set(conditions.wind.x * (1 + conditions.gust), 0, conditions.wind.y * (1 + conditions.gust));
+    // conditions.wind already includes the current gust (conditions.gust is a 0..1 intensity, not a multiplier)
+    _wind.set(conditions.wind.x, 0, conditions.wind.y);
     _ground.copy(_fwd).multiplyScalar(vb).addScaledVector(_stbd, this.lateralSpeed);
     if (!this.aground) _ground.add(_c.set(conditions.current.x, 0, conditions.current.y));
     _air.subVectors(_wind, _ground);
