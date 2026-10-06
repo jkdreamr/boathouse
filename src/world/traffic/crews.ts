@@ -64,6 +64,7 @@ export class CrewAI implements Agent {
   private spinSign = 1;
   private spinTarget = 0;
   private holdT = 0;
+  private tapClock = Infinity;
   private extraDrag: number;
   private wakeAcc = 0;
   private av: Avoid = { turn: 0, slow: 1 };
@@ -172,7 +173,12 @@ export class CrewAI implements Agent {
       const err = wrap(hd - b.heading);
       const yawRate = wrap(b.heading - this.prevHeading) / Math.max(dt, 1e-3);
       steer = clamp(2.6 * err - 5 * yawRate, -1, 1);
-      if (this.state === 'row' && this.av.slow > 0.35) b.stroke();
+      // Coxswain's tap model: one stroke() per catch at the coached rate (CrewBoat measures the rate from the taps).
+      this.tapClock += dt;
+      if (this.state === 'row' && this.av.slow > 0.35 && !b.catchQueued && this.tapClock >= 60 / b.rate) {
+        b.stroke();
+        this.tapClock = 0;
+      }
       if (this.state === 'hold') {
         this.holdT -= dt;
         if (this.holdT <= 0) {

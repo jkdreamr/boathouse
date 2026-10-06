@@ -9,13 +9,15 @@ import { Coxswain } from './cox';
 import { RowerFigure, RowerPose } from './rower';
 
 const PIN_Y = 0.36;
+/** Pin sits this far sternward of the seat's mid-slide position. */
+const PIN_DX = 0.32;
 const PIN_Z = 0.84;
 const THETA_C = 0.995;
 const THETA_F = -0.576;
 const L_HAND = 0.97;
 const L_SHOULDER = 0.5;
-const REACH_C = (-0.33 - Math.sin(0.42) * L_SHOULDER) - (-0.2 - L_HAND * Math.sin(THETA_C));
-const REACH_F = (0.33 - Math.sin(-0.3) * L_SHOULDER) - (-0.2 - L_HAND * Math.sin(THETA_F));
+const REACH_C = (-0.33 - Math.sin(0.42) * L_SHOULDER) - (-PIN_DX - L_HAND * Math.sin(THETA_C));
+const REACH_F = (0.33 - Math.sin(-0.3) * L_SHOULDER) - (-PIN_DX - L_HAND * Math.sin(THETA_F));
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 const clamp01 = (x: number) => clamp(x, 0, 1);
 const smooth = (a: number, b: number, x: number) => {
@@ -91,6 +93,8 @@ export class CrewBoat {
   hands = 0;
   onCatch?: () => void;
   onFinish?: () => void;
+  /** Hull shell paint, so a racked shell's colour carries over when it is launched. */
+  hullMaterial!: THREE.MeshPhysicalMaterial;
   private readonly rowers: BoatRower[] = [];
   private readonly fx: Fx[] = [];
   private readonly hullSpec: HullSpec;
@@ -156,7 +160,7 @@ export class CrewBoat {
     group.name = opts?.name ?? (cls === '8+' ? 'eight' : `crewboat-${cls}`);
     sceneArg.add(group);
 
-    const hullMat = new THREE.MeshPhysicalMaterial({ color: opts?.hullColor ?? '#8c1515', roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.15, side: THREE.DoubleSide });
+    const hullMat = (this.hullMaterial = new THREE.MeshPhysicalMaterial({ color: opts?.hullColor ?? '#8c1515', roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.15, side: THREE.DoubleSide }));
     const hull = new THREE.Mesh(hullGeometry(this.hullSpec), hullMat);
     hull.castShadow = true;
     hull.receiveShadow = true;
@@ -207,21 +211,16 @@ export class CrewBoat {
     const limb = new THREE.CylinderGeometry(1, 1, 1, 8);
     const seatGeo = new THREE.BoxGeometry(0.3, 0.05, 0.28);
     const trackGeo = new THREE.BoxGeometry(0.8, 0.03, 0.025);
-    const plateGeo = new THREE.BoxGeometry(0.03, 0.32, 0.36);
     const seatSpacing = cls === '8+' ? 1.42 : this.hullSpec.length / (this.seatCount + 4);
     for (let k = 1; k <= this.seatCount; k++) {
       const seatX = cls === '8+' ? -5.5 + (8 - k) * 1.42 : ((this.seatCount - 1) * seatSpacing) / 2 - (k - 1) * seatSpacing;
       const side = k % 2 === 0 ? -1 : 1;
-      const pinX = seatX - 0.2;
+      const pinX = seatX - PIN_DX;
       for (const z of [-0.12, 0.12]) {
         const track = new THREE.Mesh(trackGeo, carbon);
         track.position.set(seatX, 0.12, z);
         group.add(track);
       }
-      const plate = new THREE.Mesh(plateGeo, carbon);
-      plate.position.set(seatX - 0.78, 0.17, 0);
-      plate.rotation.z = -0.7;
-      group.add(plate);
       const beam = halfBeam(this.hullSpec, pinX);
       const gunwale = gunwaleY(this.hullSpec, pinX);
       const pin = new THREE.Vector3(pinX, PIN_Y - 0.03, side * PIN_Z);
@@ -457,7 +456,7 @@ export class CrewBoat {
     rower.lean = lerp(0.42, -0.3, body);
     const reach = lerp(REACH_C, REACH_F, arms);
     const handX = rower.seatX + rower.slide - Math.sin(rower.lean) * L_SHOULDER - reach;
-    rower.theta = Math.asin(clamp((rower.seatX - 0.2 - handX) / L_HAND, -1, 1));
+    rower.theta = Math.asin(clamp((rower.seatX - PIN_DX - handX) / L_HAND, -1, 1));
     rower.feather = 0;
     rower.pitch = progress < 0.04 ? lerp(0.08, 0.17, progress / 0.04) : progress > 0.93 ? lerp(0.17, 0.05, (progress - 0.93) / 0.07) : 0.17;
   }
@@ -471,7 +470,7 @@ export class CrewBoat {
     rower.lean = lerp(-0.3, 0.42, body);
     const reach = lerp(REACH_F, REACH_C, arms);
     const handX = rower.seatX + rower.slide - Math.sin(rower.lean) * L_SHOULDER - reach;
-    rower.theta = Math.asin(clamp((rower.seatX - 0.2 - handX) / L_HAND, -1, 1));
+    rower.theta = Math.asin(clamp((rower.seatX - PIN_DX - handX) / L_HAND, -1, 1));
     rower.feather = progress < 0.1 ? smooth(0, 0.1, progress) : progress < 0.62 ? 1 : progress < 0.88 ? 1 - smooth(0.62, 0.88, progress) : 0;
     rower.pitch = progress < 0.9 ? 0.05 : lerp(0.05, 0.08, (progress - 0.9) / 0.1);
   }

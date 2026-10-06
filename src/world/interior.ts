@@ -360,6 +360,7 @@ export function buildInterior(scene: THREE.Scene) {
             const col = SHELL_COLORS[COLOR_CYCLE[colorIdx++ % COLOR_CYCLE.length]];
             m = new THREE.Mesh(shellGeometry(cls, col), I.hull);
             m.name = `shell:${id}`;
+            m.userData.color = col;
             m.position.copy(pos);
             m.rotation.set(Math.PI, STORED_HEADING, 0, 'YXZ');
             m.castShadow = false;

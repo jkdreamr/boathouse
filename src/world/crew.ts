@@ -22,7 +22,8 @@ const handGeo = new THREE.SphereGeometry(0.045, 8, 6);
 
 const suitMat = new THREE.MeshStandardMaterial({ color: '#8c1515', roughness: 0.7 });
 const shoeMat = new THREE.MeshStandardMaterial({ color: '#2e2d29', roughness: 0.8 });
-const hairMat = new THREE.MeshStandardMaterial({ color: '#2a1d16', roughness: 0.9 });
+const hairMats = ['#1c140f', '#2a1d16', '#4a3020', '#6b4a2b', '#a77b48'].map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9 }));
+const trimMat = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.7 });
 const capMat = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.7 });
 const skinMats = SKIN_TONES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.7 }));
 
@@ -71,6 +72,8 @@ export class CrewFigure {
   private readonly neck: THREE.Mesh;
   private readonly head: THREE.Mesh;
   private readonly thigh: THREE.Mesh[] = [];
+  private readonly hem: THREE.Mesh[] = [];
+  private readonly bareThigh: THREE.Mesh[] = [];
   private readonly shin: THREE.Mesh[] = [];
   private readonly foot: THREE.Mesh[] = [];
   private readonly uarm: THREE.Mesh[] = [];
@@ -81,7 +84,8 @@ export class CrewFigure {
   private readonly lastPose = new THREE.Vector3();
 
   constructor(seed: number) {
-    this.scale = 0.96 + (((seed * 16807) % 2147483647) / 2147483647) * 0.08;
+    // men's varsity stature 1.83-2.00 m, matching RowerFigure (base figure is 1.805 m tall)
+    this.scale = (1.83 + (((seed * 16807) % 2147483647) / 2147483647) * 0.17) / 1.805;
     const skin = skinMats[seed % skinMats.length];
     const mk = (mat: THREE.Material, shadow = false) => {
       const m = new THREE.Mesh(limbGeo, mat);
@@ -94,12 +98,14 @@ export class CrewFigure {
     this.neck = mk(skin);
     this.head = new THREE.Mesh(headGeo, skin);
     this.head.castShadow = true;
-    const cap = new THREE.Mesh(hairGeo, seed % 3 === 0 ? capMat : hairMat);
+    const cap = new THREE.Mesh(hairGeo, seed % 3 === 0 ? capMat : hairMats[(seed * 7) % hairMats.length]);
     cap.position.set(0, 0.012, -0.025);
     this.head.add(cap);
     this.group.add(this.head);
     for (let i = 0; i < 2; i++) {
       this.thigh.push(mk(suitMat, true));
+      this.hem.push(mk(trimMat));
+      this.bareThigh.push(mk(skin));
       this.shin.push(mk(skin, true));
       this.uarm.push(mk(skin));
       this.farm.push(mk(skin));
@@ -143,7 +149,12 @@ export class CrewFigure {
       _hip.y = p.pos.y + hipY;
       _pole.copy(_fwd);
       ikMid(_hip, _ankle, thighL, shinL, _pole, _knee);
-      between(this.thigh[i], _hip, _knee, 0.075 * s);
+      // unisuit leg ends mid-thigh with a white hem band
+      _a.lerpVectors(_hip, _knee, 0.52);
+      _b.lerpVectors(_hip, _knee, 0.58);
+      between(this.thigh[i], _hip, _a, 0.075 * s);
+      between(this.hem[i], _a, _b, 0.072 * s);
+      between(this.bareThigh[i], _b, _knee, 0.066 * s);
       between(this.shin[i], _knee, _ankle, 0.05 * s);
       this.foot[i].position.copy(_ankle);
       this.foot[i].position.y -= 0.03 * s;

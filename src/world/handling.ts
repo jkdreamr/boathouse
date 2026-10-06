@@ -8,7 +8,8 @@ import { addSystem } from '../sim/systems';
 import { floorAt, hitsWall } from './collide';
 import { terrainHeight } from './terrain';
 import { Y0, ZW } from './boathouseDims';
-import { DOCK, DOCK_Y } from './site';
+import { BAYS, BAY_W } from './boathouseDims';
+import { DOCK, DOCK_Y, gangway } from './site';
 import { CrewFigure } from './crew';
 import { rackSlots, RackSlot } from './racks';
 
@@ -45,8 +46,6 @@ const _qX = new THREE.Quaternion();
 const _Y = new THREE.Vector3(0, 1, 0);
 const _Z = new THREE.Vector3(0, 0, 1);
 const _X = new THREE.Vector3(1, 0, 0);
-const _m4 = new THREE.Matrix4();
-const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
 
 const ease = (x: number) => {
   x = Math.min(1, Math.max(0, x));
@@ -169,63 +168,10 @@ export class Handling {
   private handB = new THREE.Vector3();
   private lastHit = '';
   private letGoN = 0;
+  private shellColor: string | null = null;
 
   constructor(h: HandlingHooks) {
     this.h = h;
-    // TEMP until interior merges: discover stored 8+ shells facing the aisles.
-    if (rackSlots.length === 0) {
-      const names = ['Jim Gray', 'Cardinal', 'Arrillaga', 'Redwood'];
-      const aisleXs = [-11.55, -4.45, -2.55, 4.55];
-      const shells: { im: THREE.InstancedMesh; i: number; m: THREE.Matrix4 }[] = [];
-      h.scene.traverse((o) => {
-        const im = o as THREE.InstancedMesh;
-        if (!im.isInstancedMesh) return;
-        if (!im.geometry.boundingBox) im.geometry.computeBoundingBox();
-        const bb = im.geometry.boundingBox!;
-        if (bb.max.x - bb.min.x > 9 && Math.abs(bb.max.x - bb.min.x - EIGHT.length) < 0.3) {
-          for (let i = 0; i < im.count; i++) {
-            im.getMatrixAt(i, _m4);
-            shells.push({ im, i, m: _m4.clone() });
-          }
-        }
-      });
-      let n = 0;
-      for (const s of shells) {
-        if (n >= 3) break;
-        const p = _v1.setFromMatrixPosition(s.m);
-        if (!aisleXs.some((x) => Math.abs(p.x - x) < 0.1)) continue;
-        const lev = p.y - Y0 - EIGHT.freeboard - 0.04;
-        const tier = Math.abs(lev - 0.95) < 0.1 ? 0 : Math.abs(lev - 1.8) < 0.1 ? 1 : -1;
-        if (tier < 0) continue;
-        s.im.setMatrixAt(s.i, _zeroM);
-        s.im.instanceMatrix.needsUpdate = true;
-        const mesh = new THREE.Mesh(s.im.geometry, s.im.material as THREE.Material);
-        mesh.applyMatrix4(s.m);
-        mesh.castShadow = mesh.receiveShadow = true;
-        (s.im.parent ?? h.scene).add(mesh);
-        rackSlots.push({ id: `temp-${n}`, cls: '8+', name: names[n], pos: p.clone(), heading: Math.PI / 2, tier, mesh });
-        n++;
-      }
-      // one empty 8+ slot at a free aisle-facing level-0/1 spot
-      for (const x of aisleXs) {
-        if (n >= 4) break;
-        let placed = false;
-        for (const [tier, lev] of [0.95, 1.8].entries()) {
-          const y = Y0 + lev + 0.04 + EIGHT.freeboard;
-          const taken = shells.some((s) => {
-            const q = _v2.setFromMatrixPosition(s.m);
-            return Math.abs(q.x - x) < 0.1 && Math.abs(q.y - y) < 0.1;
-          });
-          if (!taken) {
-            rackSlots.push({ id: `temp-${n}`, cls: '8+', name: names[n], pos: new THREE.Vector3(x, y, 23.1), heading: Math.PI / 2, tier, mesh: null });
-            n++;
-            placed = true;
-            break;
-          }
-        }
-        if (placed) break;
-      }
-    }
     this.carried = new THREE.Mesh(storedHullGeometry(EIGHT), new THREE.MeshPhysicalMaterial({ color: '#f3f1ea', roughness: 0.3, clearcoat: 0.8, clearcoatRoughness: 0.2, side: THREE.DoubleSide }));
     this.carried.castShadow = true;
     this.carried.visible = false;
@@ -339,7 +285,7 @@ export class Handling {
     let best: RackSlot | null = null;
     let bestD = 2.2;
     for (const s of rackSlots) {
-      if (s.cls !== '8+' || !s.mesh || s.mesh.visible === false) continue;
+      if (s.cls !== '8+' || !s.mesh || s.mesh.visible === false || !this.reachable(s)) continue;
       const dx = Math.cos(s.heading);
       const dz = -Math.sin(s.heading);
       const ax = s.pos.x - dx * HL;
@@ -366,6 +312,14 @@ export class Handling {
     return this.targetSlot() !== null;
   }
 
+  /** Shell is in a bay whose door is open and, if outboard, its inboard neighbour is clear. */
+  private reachable(s: RackSlot) {
+    if (!BAYS.some((b) => b.open && Math.abs(s.pos.x - b.x) < BAY_W + 1)) return false;
+    if (!s.id.endsWith('-o')) return true;
+    const inner = rackSlots.find((o) => o.id === s.id.slice(0, -2) + '-i');
+    return !inner || this.slotEmpty(inner);
+  }
+
   private slotEmpty(s: RackSlot) {
     return !s.mesh || s.mesh.visible === false;
   }
@@ -375,9 +329,10 @@ export class Handling {
     let best: RackSlot | null = null;
     let bd = Infinity;
     for (const s of rackSlots) {
-      if (s.cls !== '8+' || !this.slotEmpty(s)) continue;
-      if (Math.abs(s.pos.x) < bd) {
-        bd = Math.abs(s.pos.x);
+      if (s.cls !== '8+' || !this.slotEmpty(s) || !this.reachable(s)) continue;
+      const cost = Math.abs(s.pos.x) + s.tier * 20;
+      if (cost < bd) {
+        bd = cost;
         best = s;
       }
     }
@@ -433,8 +388,9 @@ export class Handling {
       const y1 = Math.max(_v1.y, _v2.y) + 0.05;
       // gangway rails are only ~1.05 m above the ramp deck: a hull carried
       // overhead may pass over them while in the gangway footprint
-      if (Math.abs(_v1.x) <= 1.1 + r && _v1.z >= -11.2 && _v1.z <= 0.4) {
-        const deck = DOCK_Y + conditions.level + (Y0 - (DOCK_Y + conditions.level)) * ((_v1.z + 11.2) / 11.4);
+      if (Math.abs(_v1.x) <= 1.1 + r && _v1.z >= 0.2 - 13.5 * Math.cos(gangway.rotation.x) && _v1.z <= 0.4) {
+        // live gangway: hinged at (0, Y0, 0.2), 13.5 m long, angle follows the tide
+        const deck = Y0 - (0.2 - Math.min(_v1.z, 0.2)) * Math.tan(-gangway.rotation.x);
         if (Math.min(_v1.y, _v2.y) > deck + 1.1) continue;
       }
       if (hitsWall(_v1.x, _v1.z, r, y0, y1)) {
@@ -635,7 +591,11 @@ export class Handling {
     this.callout('Hands on.');
     this.h.eight.group.visible = false;
     if (s.mesh) s.mesh.visible = false;
-    if (s.mesh instanceof THREE.Mesh) this.carried.material = s.mesh.material as THREE.Material;
+    if (s.mesh instanceof THREE.Mesh) {
+      this.carried.geometry = s.mesh.geometry;
+      this.carried.material = s.mesh.material as THREE.Material;
+      this.shellColor = (s.mesh.userData.color as string | undefined) ?? null;
+    }
     this.carried.visible = true;
     this.carryH = WAIST;
     this.leadIsBow = true;
@@ -915,6 +875,7 @@ export class Handling {
     this.h.eight.reset(_v3, this.pose.heading);
     this.h.eight.group.visible = true;
     this.h.eight.group.name = this.outSlot?.name ?? 'eight';
+    if (this.shellColor) this.h.eight.hullMaterial.color.set(this.shellColor);
     this.stowed = false;
     this.phase = 'idle';
     this.sub = '';
