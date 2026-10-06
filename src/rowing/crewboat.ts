@@ -733,6 +733,8 @@ export class CrewBoat {
   }
 
   update(dt: number, steer: number, time: number) {
+    // THREE.Clock's first getDelta() is 0; a zero substep would divide by zero in step().
+    if (!(dt > 0)) return;
     const hMax = 1 / 120;
     const count = Math.max(1, Math.ceil(dt / hMax));
     const h = dt / count;

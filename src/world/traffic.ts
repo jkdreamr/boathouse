@@ -113,7 +113,7 @@ export function initTraffic(scene: THREE.Scene, getPlayerBoat: () => CrewBoat | 
           const dz = a.z - b.z;
           const min = a.halfBeam + b.halfBeam + 0.35 * (a.halfLen + b.halfLen) * 0.5;
           const d2 = dx * dx + dz * dz;
-          if (d2 > min * min || d2 < 1e-6) continue;
+          if (!(d2 <= min * min) || d2 < 1e-6) continue;
           const d = Math.sqrt(d2);
           const push = (min - d) / d;
           if (b === player) a.nudge(dx * push, dz * push);

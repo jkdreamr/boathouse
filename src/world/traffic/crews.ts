@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { CrewBoat, type BoatClass } from '../../rowing/crewboat';
-import { conditions } from '../../sim/conditions';
 import { centerline } from '../terrain';
 import { type Agent, type Avoid, type Ctx, avoid, bankSafe, clamp, headingTo, laneZ, rng, wrap } from './nav';
 
@@ -211,10 +210,7 @@ export class CrewAI implements Agent {
       }
     }
     if (this.extraDrag > 0) b.speed = Math.max(0, b.speed - this.extraDrag * b.speed * b.speed * dt);
-    const g = b.group.position;
-    g.x += conditions.current.x * dt;
-    g.z += conditions.current.y * dt;
-    g.y += conditions.level;
+    // CrewBoat itself drifts with conditions.current and floats at conditions.level.
 
     if (this.camDist < 1100 && b.speed > 0.5) {
       this.wakeAcc += b.speed * dt;
