@@ -17,6 +17,8 @@ import { interiorLabel } from './world/interior';
 import { Handling } from './world/handling'; // [realism:handling]
 // [realism:traffic]
 import { initTraffic } from './world/traffic';
+// [realism:birds]
+import { initBirds } from './world/birds';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -370,6 +372,10 @@ function frame() {
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
+
+// [realism:birds]
+const birdFocus = new THREE.Vector3();
+initBirds(scene, () => (mode === 'row' ? birdFocus.set(eight.x, conditions.level, eight.z) : player.pos), { muted: () => sound.muted });
 
 syncUI();
 frame();
