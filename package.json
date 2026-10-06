@@ -1,0 +1,21 @@
+{
+  "name": "stanford-boathouse",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "description": "Walk the Stanford boathouse and row an 8+ on Redwood Creek",
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "typescript": "5.6",
+    "vite": "^5.4.21"
+  },
+  "private": true,
+  "type": "module"
+}
