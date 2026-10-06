@@ -33,26 +33,36 @@
 
     <div id="help" class="hidden"></div>
 
+    <!-- [realism:stroke] -->
     <section id="rowPanel" class="hidden" aria-label="Rowing controls">
       <div class="stats">
         <div><b id="spm">—</b><span>stroke rate</span></div>
         <div><b id="split">—</b><span>split /500m</span></div>
         <div><b id="speed">0.0</b><span>m/s</span></div>
         <div><b id="dist">0</b><span>meters</span></div>
+        <div class="rudderStat">
+          <div class="rudderEnds"><span>P</span><span>S</span></div>
+          <div class="rudderTrack" role="img" aria-label="Rudder position">
+            <i id="rudderMarker"></i>
+          </div>
+          <span>rudder</span>
+        </div>
       </div>
       <div class="controls">
-        <div class="rate">
-          <button id="rateDown" type="button" aria-label="Lower rate">−</button>
-          <span>rate <b id="rateVal">24</b></span>
-          <button id="rateUp" type="button" aria-label="Raise rate">+</button>
+        <div class="pressure" role="group" aria-label="Stroke pressure">
+          <button id="pressureLight" type="button" data-pressure="0" aria-pressed="false">Light</button>
+          <button id="pressureHalf" type="button" data-pressure="1" aria-pressed="true">Half</button>
+          <button id="pressureFull" type="button" data-pressure="2" aria-pressed="false">Full</button>
         </div>
         <button id="strokeBtn" type="button">STROKE</button>
         <div class="side">
+          <button id="backBtn" class="hidden" type="button">Back it down (R)</button>
           <button id="camBtn" type="button">Chase cam</button>
           <button id="walkBtn" type="button">Return to walk</button>
         </div>
       </div>
     </section>
+    <!-- [/realism:stroke] -->
 
     <div id="pause" class="hidden"><p>Click to look around</p></div>
 

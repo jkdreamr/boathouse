@@ -1,26 +1,45 @@
 import * as THREE from 'three';
 import { blobTexture, ringTexture, textTexture } from '../textures';
 import { between } from '../world/build';
-import { centerline, channelDepthDist } from '../world/terrain';
+import { conditions } from '../sim/conditions';
+import { terrainHeight } from '../world/terrain';
 import { deckGeometry, EIGHT, FOUR, gunwaleY, halfBeam, hullGeometry, HullSpec, PAIR } from './hull';
 import { BLADE_CENTER, makeOarMesh } from './oar';
-import { RowerFigure } from './rower';
+import { Coxswain } from './cox';
+import { RowerFigure, RowerPose } from './rower';
 
-const TC = 0.96; // catch angle (rad, blade toward bow)
-const TF = 0.6; // finish angle
 const PIN_Y = 0.36;
 const PIN_Z = 0.84;
-const DRAG = 0.0208;
-const IMPULSE = 1.0;
-
-const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
-const ease = (x: number) => {
-  x = clamp01(x);
-  return x * x * (3 - 2 * x);
+const THETA_C = 0.995;
+const THETA_F = -0.576;
+const L_HAND = 0.97;
+const L_SHOULDER = 0.5;
+const REACH_C = (-0.33 - Math.sin(0.42) * L_SHOULDER) - (-0.2 - L_HAND * Math.sin(THETA_C));
+const REACH_F = (0.33 - Math.sin(-0.3) * L_SHOULDER) - (-0.2 - L_HAND * Math.sin(THETA_F));
+const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+const clamp01 = (x: number) => clamp(x, 0, 1);
+const smooth = (a: number, b: number, x: number) => {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
 };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const pressureFactor = [1.06, 1, 0.97] as const;
+export const FPK = [122, 205, 340];
+const _a = new THREE.Vector3();
+const _c = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _stbd = new THREE.Vector3();
+const _ground = new THREE.Vector3();
+const _wind = new THREE.Vector3();
+const _air = new THREE.Vector3();
+const _boatQ = new THREE.Quaternion();
+const _localQ = new THREE.Quaternion();
+const _lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _chaseTarget = new THREE.Vector3();
 
 export type BoatClass = '8+' | '4+' | '2-';
+type CrewState = 'ready' | 'drive' | 'recovery' | 'back';
+type Phase = 'Ready' | 'Glide' | 'Drive' | 'Recovery' | 'Backing' | 'Aground';
 
 interface BoatRower {
   side: number;
@@ -28,6 +47,19 @@ interface BoatRower {
   oar: THREE.Group;
   seat: THREE.Mesh;
   figure: RowerFigure;
+  pose: RowerPose;
+  handIn: THREE.Vector3;
+  handOut: THREE.Vector3;
+  slide: number;
+  lean: number;
+  theta: number;
+  pitch: number;
+  feather: number;
+  jitter: number;
+  baseJitter: number;
+  backSlide: number;
+  backLean: number;
+  backTheta: number;
 }
 
 interface Fx {
@@ -39,60 +71,103 @@ interface Fx {
   a0: number;
 }
 
-const _a = new THREE.Vector3();
-const _b = new THREE.Vector3();
-const _c = new THREE.Vector3();
-const _e = new THREE.Euler(0, 0, 0, 'YXZ');
+const HULL_DATA = {
+  '8+': { shell: 96, rowers: 8, cox: 55, drag: 12.7, rudderDrag: 30, cdAf: 2, cdAs: 9, iz: 15000, cr: 1900, cr0: 400, crRudder: 16, lr: 8, windArm: 1.2, cl2: 1300, cl1: 300 },
+  '4+': { shell: 51, rowers: 4, cox: 55, drag: 8.4, rudderDrag: 20, cdAf: 1.2, cdAs: 6, iz: 5500, cr: 1000, cr0: 0, crRudder: 12.8, lr: 6, windArm: 0.9, cl2: 1300, cl1: 300 },
+  '2-': { shell: 27, rowers: 2, cox: 0, drag: 4.9, rudderDrag: 12, cdAf: 0.7, cdAs: 3.5, iz: 1800, cr: 500, cr0: 0, crRudder: 9.6, lr: 4.6, windArm: 0.7, cl2: 1300, cl1: 300 },
+} as const;
 
 export class CrewBoat {
-  group = new THREE.Group();
+  readonly group = new THREE.Group();
   rate = 24;
   speed = 0;
+  avgSpeed = 0;
   distance = 0;
   heading = 0;
   spm = 0;
-  t = 0;
-  running = false;
+  moored = false;
+  pressure: 0 | 1 | 2 = 1;
+  rudder = 0;
+  hands = 0;
   onCatch?: () => void;
   onFinish?: () => void;
-  private queued = false;
-  private rowers: BoatRower[] = [];
-  private autoHold = 0;
-  private lastCatch = -10;
-  private time = 0;
-  private fx: Fx[] = [];
-  private fxNext = 0;
-  private chasePos = new THREE.Vector3();
-  private chaseInit = false;
+  private readonly rowers: BoatRower[] = [];
+  private readonly fx: Fx[] = [];
   private readonly hullSpec: HullSpec;
   private readonly hasCox: boolean;
   private readonly coxPosition: THREE.Vector3;
+  private readonly cox: Coxswain | null;
+  private readonly hullData: (typeof HULL_DATA)[BoatClass];
+  private readonly rowerMass: number;
+  private readonly totalMass: number;
+  private readonly lateralMass: number;
+  private readonly seatCount: number;
+  private readonly randomSeed: { value: number };
+  private state: CrewState = 'ready';
+  private queuedCatch = false;
+  private queuedCatchDue = 0;
+  private queuedBackstrokes = 0;
+  private driveElapsed = 0;
+  private driveDuration = 0;
+  private recoveryProgress = 0;
+  private recoveryDuration = 0;
+  private backElapsed = 0;
+  private backForwardQueued = false;
+  private tapLast = -Infinity;
+  private lastCatch = -Infinity;
+  private catchDistance = 0;
+  private time = 0;
+  private lastCameraTime = -Infinity;
+  private lastReadoutSpm = -1;
+  private lastReadoutSplit = -1;
+  private fxNext = 0;
+  private momentum = 0;
+  private lateralSpeed = 0;
+  private yawRate = 0;
+  private previousCrewX = 0;
+  private crewSpeed = 0;
+  private roll = 0;
+  private rollRate = 0;
+  private propulsiveForce = 0;
+  private agroundPoints = 0;
+  private wasAground = false;
+  private limitedHands = 0;
+  private catchYawNoise = 0;
+  private readonly coxX: number;
+  private chasePos = new THREE.Vector3();
+  private chaseInit = false;
 
   constructor(
-    readonly scene: THREE.Scene,
+    readonly sceneArg: THREE.Scene,
     cls: BoatClass = '8+',
     opts?: { name?: string; hullColor?: string },
   ) {
     this.hullSpec = cls === '8+' ? EIGHT : cls === '4+' ? FOUR : PAIR;
+    this.hullData = HULL_DATA[cls];
     this.hasCox = cls !== '2-';
-    this.coxPosition = new THREE.Vector3(-this.hullSpec.length / 2 + 0.85, 1, 0);
-    const g = this.group;
-    g.rotation.order = 'YZX';
-    g.name = opts?.name ?? (cls === '8+' ? 'eight' : `crewboat-${cls}`);
-    scene.add(g);
+    this.seatCount = this.hullData.rowers;
+    this.rowerMass = this.seatCount * 85;
+    this.totalMass = this.hullData.shell + this.rowerMass + this.hullData.cox;
+    this.lateralMass = this.totalMass * 1.5;
+    this.coxX = -this.hullSpec.length / 2 + 0.85;
+    this.randomSeed = { value: 9173 + cls.length * 383 };
+    const group = this.group;
+    group.rotation.order = 'YZX';
+    group.name = opts?.name ?? (cls === '8+' ? 'eight' : `crewboat-${cls}`);
+    sceneArg.add(group);
+
     const hullMat = new THREE.MeshPhysicalMaterial({ color: opts?.hullColor ?? '#8c1515', roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.15, side: THREE.DoubleSide });
     const hull = new THREE.Mesh(hullGeometry(this.hullSpec), hullMat);
     hull.castShadow = true;
     hull.receiveShadow = true;
-    g.add(hull);
+    group.add(hull);
     const deckMat = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.35, side: THREE.DoubleSide });
     for (const [x0, x1] of [
       [Math.min(5.3, this.hullSpec.length / 2 - 0.3), this.hullSpec.length / 2 - 0.02],
       [-this.hullSpec.length / 2 + 0.02, -this.hullSpec.length / 2 + 0.55],
     ]) {
-      const d = new THREE.Mesh(deckGeometry(this.hullSpec, x0, x1), deckMat);
-      d.castShadow = true;
-      g.add(d);
+      const deck = new THREE.Mesh(deckGeometry(this.hullSpec, x0, x1), deckMat);
+      group.add(deck);
     }
     const name = new THREE.Mesh(
       new THREE.PlaneGeometry(1.5, 0.22),
@@ -100,99 +175,102 @@ export class CrewBoat {
     );
     name.rotation.set(-Math.PI / 2, 0, -Math.PI / 2);
     name.position.set(Math.min(6.6, this.hullSpec.length / 2 - 1), gunwaleY(this.hullSpec, Math.min(6.6, this.hullSpec.length / 2 - 1)) + 0.02, 0);
-    g.add(name);
+    group.add(name);
     const trim = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.4 });
-    for (const s of [-1, 1]) {
+    for (const side of [-1, 1]) {
       const pts: THREE.Vector3[] = [];
-      for (let x = -this.hullSpec.length / 2 + 0.1; x <= this.hullSpec.length / 2 - 0.1; x += 0.4) pts.push(new THREE.Vector3(x, gunwaleY(this.hullSpec, x) + 0.005, s * (halfBeam(this.hullSpec, x) + 0.004)));
+      for (let x = -this.hullSpec.length / 2 + 0.1; x <= this.hullSpec.length / 2 - 0.1; x += 0.4) pts.push(new THREE.Vector3(x, gunwaleY(this.hullSpec, x) + 0.005, side * (halfBeam(this.hullSpec, x) + 0.004)));
       const rail = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.012, 5), trim);
-      g.add(rail);
+      group.add(rail);
     }
     const bowBall = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), trim);
     bowBall.position.set(this.hullSpec.length / 2, gunwaleY(this.hullSpec, this.hullSpec.length / 2) + 0.02, 0);
-    g.add(bowBall);
+    group.add(bowBall);
     const carbon = new THREE.MeshStandardMaterial({ color: '#1d1e20', roughness: 0.5, metalness: 0.3 });
     const keelson = new THREE.Mesh(new THREE.BoxGeometry(this.hullSpec.length - 3.4, 0.03, 0.26), carbon);
     keelson.position.set(-0.9, 0.0, 0);
-    g.add(keelson);
+    group.add(keelson);
     const fin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.01), carbon);
     fin.position.set(-this.hullSpec.length / 2 + 0.7, -0.2, 0);
-    g.add(fin);
+    group.add(fin);
+
     if (this.hasCox) {
       const coxSeat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.42), carbon);
-      coxSeat.position.set(this.coxPosition.x + 0.1, 0.12, 0);
-      g.add(coxSeat);
-      const coxBox = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.16), carbon);
-      coxBox.position.set(this.coxPosition.x + 0.75, 0.3, 0.17);
-      g.add(coxBox);
-      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.08), new THREE.MeshBasicMaterial({ color: '#9fd17a' }));
-      screen.rotation.y = -Math.PI / 2;
-      screen.position.set(this.coxPosition.x + 0.695, 0.31, 0.17);
-      g.add(screen);
+      coxSeat.position.set(this.coxX + 0.1, 0.12, 0);
+      group.add(coxSeat);
     }
+    this.cox = new Coxswain({ seed: 9173, coxX: this.coxX, spec: this.hullSpec, withFigure: this.hasCox });
+    this.coxPosition = this.cox.eye;
+    group.add(this.cox.group);
+
     const alu = new THREE.MeshStandardMaterial({ color: '#c3c6c9', roughness: 0.3, metalness: 0.85 });
     const limb = new THREE.CylinderGeometry(1, 1, 1, 8);
     const seatGeo = new THREE.BoxGeometry(0.3, 0.05, 0.28);
     const trackGeo = new THREE.BoxGeometry(0.8, 0.03, 0.025);
     const plateGeo = new THREE.BoxGeometry(0.03, 0.32, 0.36);
-    const seatCount = cls === '8+' ? 8 : cls === '4+' ? 4 : 2;
-    const seatSpacing = cls === '8+' ? 1.42 : this.hullSpec.length / (seatCount + 4);
-    for (let k = 1; k <= seatCount; k++) {
-      const seatX = cls === '8+' ? -5.5 + (8 - k) * 1.42 : ((seatCount - 1) * seatSpacing) / 2 - (k - 1) * seatSpacing;
+    const seatSpacing = cls === '8+' ? 1.42 : this.hullSpec.length / (this.seatCount + 4);
+    for (let k = 1; k <= this.seatCount; k++) {
+      const seatX = cls === '8+' ? -5.5 + (8 - k) * 1.42 : ((this.seatCount - 1) * seatSpacing) / 2 - (k - 1) * seatSpacing;
       const side = k % 2 === 0 ? -1 : 1;
       const pinX = seatX - 0.2;
       for (const z of [-0.12, 0.12]) {
-        const tr = new THREE.Mesh(trackGeo, carbon);
-        tr.position.set(seatX, 0.12, z);
-        g.add(tr);
+        const track = new THREE.Mesh(trackGeo, carbon);
+        track.position.set(seatX, 0.12, z);
+        group.add(track);
       }
       const plate = new THREE.Mesh(plateGeo, carbon);
       plate.position.set(seatX - 0.78, 0.17, 0);
       plate.rotation.z = -0.7;
-      g.add(plate);
-      const hb = halfBeam(this.hullSpec, pinX);
-      const gy = gunwaleY(this.hullSpec, pinX);
+      group.add(plate);
+      const beam = halfBeam(this.hullSpec, pinX);
+      const gunwale = gunwaleY(this.hullSpec, pinX);
       const pin = new THREE.Vector3(pinX, PIN_Y - 0.03, side * PIN_Z);
       for (const dx of [-0.3, 0.3]) {
-        const st = new THREE.Mesh(limb, alu);
-        between(st, new THREE.Vector3(pinX + dx, gy, side * hb), pin, 0.014);
-        st.castShadow = true;
-        g.add(st);
+        const support = new THREE.Mesh(limb, alu);
+        between(support, new THREE.Vector3(pinX + dx, gunwale, side * beam), pin, 0.014);
+        group.add(support);
       }
       const back = new THREE.Mesh(limb, alu);
       between(back, new THREE.Vector3(pinX, 0.02, side * 0.12), pin, 0.012);
-      g.add(back);
+      group.add(back);
       const oar = makeOarMesh();
       oar.rotation.order = 'YZX';
       oar.position.set(pinX, PIN_Y, side * PIN_Z);
-      g.add(oar);
+      for (const part of oar.children) (part as THREE.Mesh).castShadow = false;
+      group.add(oar);
       const seat = new THREE.Mesh(seatGeo, carbon);
-      g.add(seat);
+      group.add(seat);
       const figure = new RowerFigure({ seed: k });
-      g.add(figure.group);
+      group.add(figure.group);
+      const handIn = new THREE.Vector3();
+      const handOut = new THREE.Vector3();
+      const pose: RowerPose = { seatX, slide: -0.33, lean: 0.42, stretcherX: seatX - 0.72, handIn, handOut, side };
+      const baseJitter = (this.rand() * 2 - 1) * 0.012;
       this.rowers.push({
-        side,
-        seatX,
-        oar,
-        seat,
-        figure,
+        side, seatX, oar, seat, figure, pose, handIn, handOut,
+        slide: -0.33, lean: 0.42, theta: THETA_C, pitch: 0.07, feather: 0,
+        jitter: baseJitter, baseJitter, backSlide: -0.33, backLean: 0.42, backTheta: THETA_C,
       });
     }
+
     const ring = ringTexture();
     const blob = blobTexture();
     const plane = new THREE.PlaneGeometry(1, 1);
     plane.rotateX(-Math.PI / 2);
     for (let i = 0; i < 64; i++) {
       const isSplash = i >= 48;
-      const m = new THREE.Mesh(
+      const mesh = new THREE.Mesh(
         plane,
         new THREE.MeshBasicMaterial({ map: isSplash ? blob : ring, transparent: true, depthWrite: false, opacity: 0, color: isSplash ? '#ffffff' : '#dfeaf0' }),
       );
-      m.visible = false;
-      m.renderOrder = 2;
-      scene.add(m);
-      this.fx.push({ m, life: 1, age: 1, s0: 1, s1: 1, a0: 0 });
+      mesh.visible = false;
+      mesh.renderOrder = 2;
+      sceneArg.add(mesh);
+      this.fx.push({ m: mesh, life: 1, age: 1, s0: 1, s1: 1, a0: 0 });
     }
+    this.driveDuration = this.driveTime();
+    this.recoveryDuration = Math.max(0.6, 60 / this.rate - this.driveDuration);
+    this.previousCrewX = this.crewOffset('ready', 0);
     this.pose();
   }
 
@@ -202,196 +280,514 @@ export class CrewBoat {
   get z() {
     return this.group.position.z;
   }
+  get aground() {
+    return this.agroundPoints !== 0;
+  }
+  get catchQueued() {
+    return this.queuedCatch || this.backForwardQueued;
+  }
+  get driveFrac() {
+    return this.driveTime() / (60 / this.rate);
+  }
+  get phase(): Phase {
+    if (this.aground) return 'Aground';
+    if (this.state === 'back') return 'Backing';
+    if (this.state === 'drive') return 'Drive';
+    if (this.state === 'recovery') return 'Recovery';
+    return Math.abs(this.speed) > 0.3 ? 'Glide' : 'Ready';
+  }
 
-  reset(p: THREE.Vector3, heading: number) {
-    this.group.position.set(p.x, 0, p.z);
+  reset(pos: THREE.Vector3, heading: number) {
+    this.group.position.set(pos.x, conditions.level, pos.z);
     this.heading = heading;
     this.speed = 0;
+    this.avgSpeed = 0;
     this.distance = 0;
-    this.running = false;
-    this.queued = false;
-    this.t = 0;
     this.spm = 0;
+    this.pressure = 1;
+    this.rudder = 0;
+    this.hands = 0;
+    this.limitedHands = 0;
+    this.momentum = 0;
+    this.lateralSpeed = 0;
+    this.yawRate = 0;
+    this.roll = 0;
+    this.rollRate = 0;
+    this.propulsiveForce = 0;
+    this.state = 'ready';
+    this.queuedCatch = false;
+    this.queuedCatchDue = 0;
+    this.queuedBackstrokes = 0;
+    this.backForwardQueued = false;
+    this.driveElapsed = 0;
+    this.driveDuration = this.driveTime();
+    this.recoveryProgress = 0;
+    this.recoveryDuration = Math.max(0.6, 60 / this.rate - this.driveDuration);
+    this.backElapsed = 0;
+    this.tapLast = -Infinity;
+    this.lastCatch = -Infinity;
+    this.catchDistance = 0;
+    this.agroundPoints = 0;
+    this.wasAground = false;
+    this.time = 0;
+    this.lastCameraTime = -Infinity;
+    this.lastReadoutSpm = -1;
+    this.lastReadoutSplit = -1;
     this.chaseInit = false;
+    this.previousCrewX = this.crewOffset('ready', 0);
+    this.crewSpeed = 0;
+    this.group.rotation.set(0, heading, 0);
+    this.group.position.y = conditions.level;
     this.pose();
   }
 
-  get driveFrac() {
-    return lerp(0.34, 0.46, clamp01((this.rate - 18) / 18));
-  }
-
-  get phase() {
-    if (!this.running) return this.speed > 0.3 ? 'Glide' : 'Ready';
-    return this.t < this.driveFrac ? 'Drive' : 'Recovery';
-  }
-
   stroke() {
-    if (!this.running) {
-      this.running = true;
-      this.t = 0;
-      this.catchEvent();
-    } else this.queued = true;
+    const now = this.time;
+    if (Number.isFinite(this.tapLast)) {
+      const interval = now - this.tapLast;
+      if (interval > 0 && interval <= 3.75) {
+        const measured = clamp(60 / interval, 16, 40);
+        this.rate += 0.55 * (measured - this.rate);
+      }
+    }
+    this.tapLast = now;
+    if (this.state === 'ready') {
+      this.startCatch(now);
+    } else if (this.state === 'drive') {
+      if (!this.queuedCatch) {
+        this.queuedCatch = true;
+        this.queuedCatchDue = now + Math.max(0, this.driveDuration - this.driveElapsed) + 0.6;
+      }
+    } else if (this.state === 'recovery') {
+      if (!this.queuedCatch) {
+        this.queuedCatch = true;
+        this.queuedCatchDue = now + (1 - this.recoveryProgress) * 0.6;
+      }
+    } else {
+      this.backForwardQueued = true;
+    }
   }
 
-  private catchEvent() {
-    if (this.time - this.lastCatch < 5) this.spm = 60 / (this.time - this.lastCatch);
-    this.lastCatch = this.time;
-    this.group.updateMatrixWorld();
-    for (const r of this.rowers) this.spawnAtBlade(r, true);
+  backStroke() {
+    if (this.state === 'back') {
+      this.queuedBackstrokes++;
+      return;
+    }
+    this.queuedBackstrokes++;
+    if (this.state === 'ready') this.startBack();
+  }
+
+  private driveTime() {
+    return clamp(0.95 - 0.0125 * (this.rate - 20), 0.7, 1) * pressureFactor[this.pressure];
+  }
+
+  private rand() {
+    this.randomSeed.value = (Math.imul(this.randomSeed.value, 1664525) + 1013904223) >>> 0;
+    return this.randomSeed.value / 4294967296;
+  }
+
+  private gaussian() {
+    const u = Math.max(1e-12, this.rand());
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * this.rand());
+  }
+
+  private startCatch(at: number) {
+    this.state = 'drive';
+    this.driveElapsed = 0;
+    this.backForwardQueued = false;
+    this.driveDuration = this.driveTime();
+    this.recoveryProgress = 0;
+    this.recoveryDuration = Math.max(0.6, 60 / this.rate - this.driveDuration);
+    this.queuedCatch = false;
+    this.queuedCatchDue = 0;
+    this.catchYawNoise = this.gaussian() * 0.03;
+    for (const rower of this.rowers) rower.jitter = rower.baseJitter + (this.rand() * 2 - 1) * 0.004;
+    this.catchEvent(at);
+  }
+
+  private catchEvent(at: number) {
+    if (Number.isFinite(this.lastCatch)) {
+      const interval = at - this.lastCatch;
+      if (interval > 0 && interval < 5) this.spm = 60 / interval;
+      else this.spm = 0;
+      if (interval > 0) this.avgSpeed = (this.distance - this.catchDistance) / interval;
+    }
+    this.lastCatch = at;
+    this.catchDistance = this.distance;
+    this.group.updateMatrixWorld(true);
+    for (const rower of this.rowers) this.spawnAtBlade(rower, true);
     this.onCatch?.();
   }
 
   private finishEvent() {
-    this.group.updateMatrixWorld();
-    for (const r of this.rowers) this.spawnAtBlade(r, false);
+    this.group.updateMatrixWorld(true);
+    for (const rower of this.rowers) this.spawnAtBlade(rower, false);
+    this.rollRate += this.gaussian() * 0.012;
     this.onFinish?.();
   }
 
-  private spawnAtBlade(r: BoatRower, splash: boolean) {
-    _a.set(BLADE_CENTER, -0.1, 0).applyMatrix4(r.oar.matrixWorld);
-    const pool = splash ? [48, 64] : [0, 48];
-    const f = this.fx[pool[0] + (this.fxNext++ % (pool[1] - pool[0]))];
-    f.m.position.set(_a.x, 0.03, _a.z);
-    f.m.visible = true;
-    f.age = 0;
+  private spawnAtBlade(rower: BoatRower, splash: boolean) {
+    _a.set(BLADE_CENTER, -0.1, 0).applyMatrix4(rower.oar.matrixWorld);
+    const base = splash ? 48 : 0;
+    const count = splash ? 16 : 48;
+    const fx = this.fx[base + (this.fxNext++ % count)];
+    fx.m.position.set(_a.x, conditions.level + 0.03, _a.z);
+    fx.m.visible = true;
+    fx.age = 0;
     if (splash) {
-      f.life = 0.45;
-      f.s0 = 0.25;
-      f.s1 = 0.9;
-      f.a0 = 0.8;
+      fx.life = 0.45;
+      fx.s0 = 0.25;
+      fx.s1 = 0.9;
+      fx.a0 = 0.8;
     } else {
-      f.life = 5;
-      f.s0 = 0.5;
-      f.s1 = 2.6;
-      f.a0 = 0.55;
+      fx.life = 5;
+      fx.s0 = 0.5;
+      fx.s1 = 2.6;
+      fx.a0 = 0.55;
     }
   }
 
-  private pose() {
-    const d = this.driveFrac;
-    const t = this.t;
-    let slide: number;
-    let lean: number;
-    let theta: number;
-    let pitch: number;
-    let feather: number;
-    if (t < d) {
-      const u = t / d;
-      slide = lerp(-0.3, 0.3, ease(u / 0.65));
-      lean = lerp(0.42, -0.3, ease((u - 0.3) / 0.6));
-      theta = lerp(TC, -TF, 0.5 - 0.5 * Math.cos(Math.PI * u));
-      pitch = u < 0.06 ? lerp(0.08, 0.17, u / 0.06) : u > 0.94 ? lerp(0.17, 0.06, (u - 0.94) / 0.06) : 0.17;
-      feather = 0;
+  private drivePose(u: number, rower: BoatRower, jitter: boolean) {
+    const du = jitter ? rower.jitter / this.driveDuration : 0;
+    const progress = clamp01(u + du);
+    const legs = smooth(0, 0.62, progress);
+    const body = smooth(0.22, 0.85, progress);
+    const arms = smooth(0.55, 1, progress);
+    rower.slide = lerp(-0.33, 0.33, legs);
+    rower.lean = lerp(0.42, -0.3, body);
+    const reach = lerp(REACH_C, REACH_F, arms);
+    const handX = rower.seatX + rower.slide - Math.sin(rower.lean) * L_SHOULDER - reach;
+    rower.theta = Math.asin(clamp((rower.seatX - 0.2 - handX) / L_HAND, -1, 1));
+    rower.feather = 0;
+    rower.pitch = progress < 0.04 ? lerp(0.08, 0.17, progress / 0.04) : progress > 0.93 ? lerp(0.17, 0.05, (progress - 0.93) / 0.07) : 0.17;
+  }
+
+  private recoveryPose(p: number, rower: BoatRower, jitter: boolean) {
+    const progress = clamp01(p + (jitter ? rower.jitter / this.recoveryDuration : 0));
+    const arms = smooth(0, 0.22, progress);
+    const body = smooth(0.08, 0.4, progress);
+    const slide = smooth(0.28, 1, progress);
+    rower.slide = lerp(0.33, -0.33, slide);
+    rower.lean = lerp(-0.3, 0.42, body);
+    const reach = lerp(REACH_F, REACH_C, arms);
+    const handX = rower.seatX + rower.slide - Math.sin(rower.lean) * L_SHOULDER - reach;
+    rower.theta = Math.asin(clamp((rower.seatX - 0.2 - handX) / L_HAND, -1, 1));
+    rower.feather = progress < 0.1 ? smooth(0, 0.1, progress) : progress < 0.62 ? 1 : progress < 0.88 ? 1 - smooth(0.62, 0.88, progress) : 0;
+    rower.pitch = progress < 0.9 ? 0.05 : lerp(0.05, 0.08, (progress - 0.9) / 0.1);
+  }
+
+  private backPose(p: number, rower: BoatRower) {
+    if (p < 0.3) {
+      const u = smooth(0, 0.3, p);
+      rower.slide = lerp(rower.backSlide, 0.1, u);
+      rower.lean = lerp(rower.backLean, -0.1, u);
+      rower.theta = lerp(rower.backTheta, -0.35, u);
+      rower.pitch = 0.05;
+      rower.feather = lerp(0, 2, smooth(0, 0.3, p));
+    } else if (p < 0.7) {
+      const u = smooth(0.3, 0.7, p);
+      rower.slide = lerp(0.1, -0.15, u);
+      rower.lean = lerp(-0.1, 0.3, u);
+      rower.theta = lerp(-0.35, 0.6, u);
+      rower.pitch = 0.27;
+      rower.feather = 2;
     } else {
-      const r = (t - d) / (1 - d);
-      theta = lerp(-TF, TC, ease(r));
-      lean = lerp(-0.3, 0.42, ease(r / 0.35));
-      slide = lerp(0.3, -0.3, ease((r - 0.25) / 0.75));
-      pitch = r < 0.85 ? 0.05 : lerp(0.05, 0.08, (r - 0.85) / 0.15);
-      feather = r < 0.12 ? ease(r / 0.12) : r < 0.7 ? 1 : 1 - ease((r - 0.7) / 0.2);
+      const u = smooth(0.7, 1, p);
+      rower.slide = lerp(-0.15, -0.33, u);
+      rower.lean = lerp(0.3, 0.42, u);
+      rower.theta = lerp(0.6, THETA_C, u);
+      rower.pitch = lerp(0.27, 0.05, u);
+      rower.feather = lerp(2, 0, u);
     }
-    for (const rw of this.rowers) {
-      const s = rw.side;
-      const o = rw.oar;
-      o.rotation.set(feather * Math.PI * 0.5, s * (theta - Math.PI / 2), -pitch);
-      o.updateMatrix();
-      const hx = rw.seatX + slide;
-      rw.seat.position.set(hx, 0.16, 0);
-      const handIn = _c.set(-0.86, 0, 0).applyMatrix4(o.matrix).clone();
-      const handOut = _c.set(-1.08, 0, 0).applyMatrix4(o.matrix).clone();
-      rw.figure.setPose({ seatX: rw.seatX, slide, lean, stretcherX: rw.seatX - 0.72, handIn, handOut, side: s });
+  }
+
+  private setRowerPose(rower: BoatRower, mode: CrewState, progress: number, useJitter: boolean) {
+    if (mode === 'drive') this.drivePose(progress, rower, useJitter);
+    else if (mode === 'recovery') this.recoveryPose(progress, rower, useJitter);
+    else if (mode === 'back') this.backPose(progress, rower);
+    else {
+      rower.slide = -0.33;
+      rower.lean = 0.42;
+      rower.theta = THETA_C;
+      rower.pitch = 0.07;
+      rower.feather = 0;
+    }
+  }
+
+  private crewOffset(mode: CrewState, progress: number) {
+    let sum = 0;
+    for (const rower of this.rowers) {
+      this.setRowerPose(rower, mode, progress, mode === 'drive' || mode === 'recovery');
+      sum += 0.8 * rower.slide - 0.22 * Math.sin(rower.lean);
+    }
+    return sum / this.seatCount;
+  }
+
+  private pose() {
+    let progress = 0;
+    if (this.state === 'drive') progress = this.driveElapsed / Math.max(this.driveDuration, 1e-3);
+    else if (this.state === 'recovery') progress = this.recoveryProgress;
+    else if (this.state === 'back') progress = this.backElapsed / 2.2;
+    for (const rower of this.rowers) {
+      this.setRowerPose(rower, this.state, progress, this.state === 'drive' || this.state === 'recovery');
+      const oar = rower.oar;
+      oar.rotation.set(rower.feather * Math.PI / 2, rower.side * (rower.theta - Math.PI / 2), -rower.pitch);
+      oar.updateMatrix();
+      rower.seat.position.set(rower.seatX + rower.slide, 0.16, 0);
+      rower.handIn.set(-0.86, 0, 0).applyMatrix4(oar.matrix).add(oar.position);
+      rower.handOut.set(-1.08, 0, 0).applyMatrix4(oar.matrix).add(oar.position);
+      rower.pose.slide = rower.slide;
+      rower.pose.lean = rower.lean;
+      rower.pose.stretcherX = rower.seatX - 0.72;
+      rower.figure.setPose(rower.pose);
+    }
+  }
+
+  private propulsion(mode: CrewState, progress: number) {
+    let force = 0;
+    for (const rower of this.rowers) {
+      this.setRowerPose(rower, mode, progress, mode === 'drive' || mode === 'recovery');
+      if (mode === 'drive') {
+        const w = (THETA_C - 0.07 - rower.theta) / ((THETA_C - 0.07) - (THETA_F + 0.105));
+        if (w >= 0 && w <= 1) force += FPK[this.pressure] * Math.sin(Math.PI * Math.pow(w, 0.7)) * Math.cos(rower.theta);
+      } else if (mode === 'back' && progress >= 0.3 && progress <= 0.7) {
+        const w = (rower.theta + 0.35) / 0.95;
+        if (w >= 0 && w <= 1) force -= 0.5 * FPK[1] * Math.sin(Math.PI * Math.pow(w, 0.7)) * Math.cos(rower.theta);
+      }
+    }
+    return force;
+  }
+
+  private startBack() {
+    this.queuedBackstrokes = Math.max(0, this.queuedBackstrokes - 1);
+    this.state = 'back';
+    this.backElapsed = 0;
+    for (const rower of this.rowers) {
+      rower.backSlide = rower.slide;
+      rower.backLean = rower.lean;
+      rower.backTheta = rower.theta;
+    }
+  }
+
+  private advanceState(h: number, now: number) {
+    if (this.state === 'drive') {
+      const before = this.driveElapsed;
+      this.driveElapsed = Math.min(this.driveDuration, this.driveElapsed + h);
+      if (before < this.driveDuration && this.driveElapsed >= this.driveDuration) {
+        this.finishEvent();
+        this.state = 'recovery';
+        this.recoveryProgress = 0;
+      }
+    } else if (this.state === 'recovery') {
+      if (this.queuedCatch) {
+        const left = this.queuedCatchDue - now;
+        const remainingAtStart = left + h;
+        this.recoveryProgress = left <= 0 ? 1 : clamp01(this.recoveryProgress + (1 - this.recoveryProgress) * Math.min(1, h / Math.max(remainingAtStart, h)));
+      } else {
+        this.recoveryProgress = clamp01(this.recoveryProgress + h / this.recoveryDuration);
+      }
+      if (this.recoveryProgress >= 1) {
+        if (this.queuedCatch) this.startCatch(now);
+        else this.state = 'ready';
+      }
+    } else if (this.state === 'back') {
+      this.backElapsed = Math.min(2.2, this.backElapsed + h);
+      if (this.backElapsed >= 2.2) {
+        if (this.queuedBackstrokes > 0) this.startBack();
+        else if (this.backForwardQueued) this.startCatch(now);
+        else this.state = 'ready';
+      }
+    } else if (this.queuedBackstrokes > 0) {
+      this.startBack();
+    }
+  }
+
+  private sampleGround() {
+    const c = Math.cos(this.heading);
+    const s = Math.sin(this.heading);
+    const bowX = this.group.position.x + c * (this.hullSpec.length / 2 - 0.3);
+    const bowZ = this.group.position.z - s * (this.hullSpec.length / 2 - 0.3);
+    const sternX = this.group.position.x - c * (this.hullSpec.length / 2 - 0.3);
+    const sternZ = this.group.position.z + s * (this.hullSpec.length / 2 - 0.3);
+    let points = 0;
+    if (terrainHeight(bowX, bowZ) > conditions.level - 0.3) points |= 1;
+    if (terrainHeight(this.group.position.x, this.group.position.z) > conditions.level - 0.3) points |= 2;
+    if (terrainHeight(sternX, sternZ) > conditions.level - 0.3) points |= 4;
+    const aground = points !== 0;
+    if (aground && !this.wasAground) {
+      this.momentum = this.rowerMass * this.crewSpeed;
+      this.speed = 0;
+      this.lateralSpeed = 0;
+      this.yawRate = 0;
+    }
+    this.agroundPoints = points;
+    this.wasAground = aground;
+  }
+
+  private updateRoll(h: number, mode: CrewState, progress: number) {
+    const rollTarget = 0.004 * this.rudder / 0.262;
+    const zeta = mode === 'drive' || (mode === 'back' && progress >= 0.3 && progress <= 0.7) ? 0.85 : 0.25;
+    const omega = (2 * Math.PI) / 1.2;
+    this.rollRate += (-omega * omega * (this.roll - rollTarget) - 2 * zeta * omega * this.rollRate) * h;
+    this.roll = clamp(this.roll + this.rollRate * h, -0.035, 0.035);
+  }
+
+  private step(h: number, steer: number, now: number) {
+    const handTarget = clamp(-steer, -1, 1);
+    this.limitedHands += clamp(handTarget - this.limitedHands, -3 * h, 3 * h);
+    this.hands += (this.limitedHands - this.hands) * (1 - Math.exp(-h / 0.06));
+    this.rudder += (0.262 * this.hands - this.rudder) * (1 - Math.exp(-h / 0.12));
+    this.rudder = clamp(this.rudder, -0.262, 0.262);
+
+    let mode = this.state;
+    let progress = 0;
+    if (mode === 'drive') progress = (this.driveElapsed + h * 0.5) / Math.max(this.driveDuration, 1e-3);
+    else if (mode === 'recovery') progress = this.recoveryProgress + (this.queuedCatch ? (1 - this.recoveryProgress) * h * 0.5 / Math.max(this.queuedCatchDue - now + h, h) : h * 0.5 / this.recoveryDuration);
+    else if (mode === 'back') progress = (this.backElapsed + h * 0.5) / 2.2;
+    this.propulsiveForce = this.propulsion(mode, progress);
+
+    const crewX = this.crewOffset(mode, progress);
+    this.crewSpeed = (crewX - this.previousCrewX) / h;
+    this.previousCrewX = crewX;
+    if (this.moored) {
+      this.propulsiveForce = 0;
+      this.crewSpeed = 0;
+      this.momentum = 0;
+      this.speed = 0;
+      this.lateralSpeed = 0;
+      this.yawRate = 0;
+      this.updateRoll(h, mode, progress);
+      this.advanceState(h, now);
+      return;
+    }
+
+    const vb = this.momentum / this.totalMass - (this.rowerMass / this.totalMass) * this.crewSpeed;
+    const heading = this.heading;
+    _fwd.set(Math.cos(heading), 0, -Math.sin(heading));
+    _stbd.set(Math.sin(heading), 0, Math.cos(heading));
+    _wind.set(conditions.wind.x * (1 + conditions.gust), 0, conditions.wind.y * (1 + conditions.gust));
+    _ground.copy(_fwd).multiplyScalar(vb).addScaledVector(_stbd, this.lateralSpeed);
+    if (!this.aground) _ground.add(_c.set(conditions.current.x, 0, conditions.current.y));
+    _air.subVectors(_wind, _ground);
+    const airMagnitude = _air.length();
+    const airFactor = 0.5 * 1.226 * airMagnitude;
+    const airAxial = airFactor * (this.hullData.cdAf) * _air.dot(_fwd);
+    const airSide = this.aground ? 0 : airFactor * this.hullData.cdAs * _air.dot(_stbd);
+    const drag = Math.sign(vb) * (this.hullData.drag + this.hullData.rudderDrag * this.rudder * this.rudder) * vb * vb;
+    const force = this.propulsiveForce - drag + (this.aground ? 0 : airAxial);
+    this.momentum += force * h;
+    let nextVb = this.momentum / this.totalMass - (this.rowerMass / this.totalMass) * this.crewSpeed;
+    if (this.aground) {
+      const bow = (this.agroundPoints & 1) !== 0;
+      const mid = (this.agroundPoints & 2) !== 0;
+      const stern = (this.agroundPoints & 4) !== 0;
+      if (bow && stern) nextVb = 0;
+      else if (bow) nextVb = mode === 'back' ? Math.min(0, nextVb) : 0;
+      else if (stern) nextVb = mode === 'back' ? 0 : Math.max(0, nextVb);
+      else if (mid) nextVb = Math.min(0, nextVb);
+      this.momentum = (nextVb + (this.rowerMass / this.totalMass) * this.crewSpeed) * this.totalMass;
+    }
+    this.speed = nextVb;
+    if (!this.aground) {
+      const sideDrag = (1300 * (this.hullSpec.length / 17.6)) * Math.abs(this.lateralSpeed) * this.lateralSpeed + 300 * (this.hullSpec.length / 17.6) * this.lateralSpeed;
+      this.lateralSpeed += (airSide - sideDrag) / this.lateralMass * h;
+      const rudderMoment = -this.hullData.crRudder * this.hullData.lr * vb * Math.abs(vb) * this.rudder;
+      const windMoment = -airSide * this.hullData.windArm;
+      const crewMoment = mode === 'drive' ? this.catchYawNoise * this.propulsiveForce * PIN_Z : 0;
+      const yawDamp = (this.hullData.cr * Math.max(Math.abs(vb), 0.5) + this.hullData.cr0) * this.yawRate;
+      this.yawRate += (rudderMoment + windMoment + crewMoment - yawDamp) / this.hullData.iz * h;
+      this.heading += this.yawRate * h;
+      _fwd.set(Math.cos(this.heading), 0, -Math.sin(this.heading));
+      _stbd.set(Math.sin(this.heading), 0, Math.cos(this.heading));
+    } else {
+      this.lateralSpeed = 0;
+      this.yawRate = 0;
+    }
+    _ground.copy(_fwd).multiplyScalar(this.speed).addScaledVector(_stbd, this.lateralSpeed);
+    if (!this.aground) _ground.add(_c.set(conditions.current.x, 0, conditions.current.y));
+    this.group.position.x += _ground.x * h;
+    this.group.position.z += _ground.z * h;
+    if (this.group.position.x > 5000 || this.group.position.x < -3000) {
+      this.group.position.x = clamp(this.group.position.x, -3000, 5000);
+      this.momentum *= 0.9;
+    }
+    this.distance += Math.hypot(_ground.x, _ground.z) * h;
+
+    this.updateRoll(h, mode, progress);
+
+    this.advanceState(h, now);
+    this.sampleGround();
+    const cycle = 60 / this.rate;
+    if (Number.isFinite(this.lastCatch) && now - this.lastCatch > cycle) {
+      const groundSpeed = Math.hypot(_ground.x, _ground.z);
+      this.avgSpeed += (groundSpeed - this.avgSpeed) * (1 - Math.exp(-h / 2.5));
     }
   }
 
   update(dt: number, steer: number, time: number) {
+    const hMax = 1 / 120;
+    const count = Math.max(1, Math.ceil(dt / hMax));
+    const h = dt / count;
+    const start = time - dt;
+    for (let i = 0; i < count; i++) this.step(h, clamp(steer, -1, 1), start + (i + 1) * h);
     this.time = time;
-    const T = 60 / this.rate;
-    const d = this.driveFrac;
-    if (this.running) {
-      const prev = this.t;
-      this.t += dt / T;
-      if (this.t < d) {
-        const u = this.t / d;
-        this.speed += IMPULSE * (Math.PI / 2) * Math.sin(Math.PI * u) * (dt / (d * T));
-      }
-      if (prev < d && this.t >= d) this.finishEvent();
-      if (this.t >= 1) {
-        if (this.queued) {
-          this.queued = false;
-          this.t -= 1;
-          this.catchEvent();
-        } else {
-          this.t = 0;
-          this.running = false;
+    if (Number.isFinite(this.lastCatch) && time - this.lastCatch > 5) this.spm = 0;
+    if (!this.moored) {
+      this.group.position.y = conditions.level - 0.01 * (this.propulsiveForce / Math.max(1, this.seatCount * FPK[this.pressure])) + 0.004 * Math.sin(1.6 * time);
+    }
+    this.group.rotation.set(this.roll, this.heading, -0.015 * this.crewOffset(this.state, this.state === 'drive' ? this.driveElapsed / Math.max(this.driveDuration, 1e-3) : this.state === 'recovery' ? this.recoveryProgress : this.state === 'back' ? this.backElapsed / 2.2 : 0));
+    this.pose();
+    if (this.cox) {
+      if (time - this.lastCameraTime <= 0.5) {
+        const roundedSpm = this.spm > 0 ? Math.round(this.spm) : 0;
+        const split = this.avgSpeed > 0.4 ? Math.floor(500 / this.avgSpeed) : 0;
+        if (roundedSpm !== this.lastReadoutSpm || split !== this.lastReadoutSplit) {
+          this.lastReadoutSpm = roundedSpm;
+          this.lastReadoutSplit = split;
+          const splitText = split > 0 ? `${Math.floor(split / 60)}:${String(split % 60).padStart(2, '0')}` : '—:—';
+          this.cox.setReadout(roundedSpm, splitText);
         }
       }
+      this.cox.update(this.hands, this.rudder, time);
     }
-    if (time - this.lastCatch > 5) this.spm = 0;
-    this.speed = Math.max(0, this.speed - (DRAG * this.speed * this.speed + 0.015 * this.speed) * dt);
-
-    const g = this.group;
-    const grip = Math.min(1, this.speed / 3);
-    if (steer !== 0) this.autoHold = 3;
-    this.autoHold -= dt;
-    let yawRate = steer * 0.1 * grip;
-    if (this.autoHold <= 0 && this.speed > 0.2) {
-      const look = g.position.x + 90;
-      const want = Math.atan2(-(centerline(look) - g.position.z), 90);
-      yawRate += THREE.MathUtils.clamp(want - this.heading, -0.4, 0.4) * 0.25 * grip;
-    }
-    const inner = channelDepthDist(g.position.x, g.position.z);
-    if (inner < 14) {
-      const want = Math.atan2(-(centerline(g.position.x + 60) - g.position.z), 60);
-      yawRate += (want - this.heading) * 0.8;
-      this.speed *= 1 - 0.6 * dt;
-    }
-    this.heading += yawRate * dt;
-    const step = this.speed * dt;
-    g.position.x += Math.cos(this.heading) * step;
-    g.position.z -= Math.sin(this.heading) * step;
-    if (g.position.x > 5000 || g.position.x < -3000) {
-      g.position.x = THREE.MathUtils.clamp(g.position.x, -3000, 5000);
-      this.speed *= 0.9;
-    }
-    this.distance += step;
-    const surge = this.running && this.t < d ? Math.sin((Math.PI * this.t) / d) : 0;
-    g.position.y = 0.012 * Math.sin(time * 1.6) - 0.01 * surge;
-    g.rotation.set(0.008 * Math.sin(time * 1.1) + 0.004 * Math.sin(time * 2.7), this.heading, 0.003 * surge);
-    this.pose();
-
-    for (const f of this.fx) {
-      if (!f.m.visible) continue;
-      f.age += dt;
-      const k = f.age / f.life;
+    for (const fx of this.fx) {
+      if (!fx.m.visible) continue;
+      fx.age += dt;
+      const k = fx.age / fx.life;
       if (k >= 1) {
-        f.m.visible = false;
+        fx.m.visible = false;
         continue;
       }
-      const s = lerp(f.s0, f.s1, 1 - (1 - k) * (1 - k));
-      f.m.scale.set(s, 1, s);
-      (f.m.material as THREE.MeshBasicMaterial).opacity = f.a0 * (1 - k);
+      const size = lerp(fx.s0, fx.s1, 1 - (1 - k) * (1 - k));
+      fx.m.scale.set(size, 1, size);
+      (fx.m.material as THREE.MeshBasicMaterial).opacity = fx.a0 * (1 - k);
     }
   }
 
   /** Cox seat view (looking toward the bow) or an elevated chase view. */
   applyCamera(cam: THREE.PerspectiveCamera, yawOff: number, pitchOff: number, chase: boolean, dt: number) {
-    const g = this.group;
+    const group = this.group;
+    this.lastCameraTime = this.time;
     if (!chase && this.hasCox) {
-      cam.position.copy(this.coxPosition).applyMatrix4(g.matrixWorld);
-      _e.set(pitchOff - 0.05, this.heading - Math.PI / 2 + yawOff, 0);
-      cam.rotation.copy(_e);
+      this.cox?.setFirstPerson(true);
+      cam.position.copy(this.coxPosition).applyMatrix4(group.matrixWorld);
+      _lookEuler.set(pitchOff - 0.12, -Math.PI / 2 + yawOff, 0, 'YXZ');
+      _localQ.setFromEuler(_lookEuler);
+      group.getWorldQuaternion(_boatQ);
+      cam.quaternion.copy(_boatQ).multiply(_localQ);
       this.chaseInit = false;
       return;
     }
-    const a = this.heading + yawOff;
-    _a.set(g.position.x - Math.cos(a) * 17, 6.5 + pitchOff * 8, g.position.z + Math.sin(a) * 17);
+    this.cox?.setFirstPerson(false);
+    const angle = this.heading + yawOff;
+    _a.set(group.position.x - Math.cos(angle) * 17, group.position.y + 6.5 + pitchOff * 8, group.position.z + Math.sin(angle) * 17);
     if (!this.chaseInit) {
       this.chasePos.copy(_a);
       this.chaseInit = true;
     }
     this.chasePos.lerp(_a, 1 - Math.exp(-dt * 3));
     cam.position.copy(this.chasePos);
-    _b.set(g.position.x + Math.cos(this.heading) * 5, 0.6, g.position.z - Math.sin(this.heading) * 5);
-    cam.lookAt(_b);
+    _chaseTarget.set(group.position.x + Math.cos(this.heading) * 5, group.position.y + 0.6, group.position.z - Math.sin(this.heading) * 5);
+    cam.lookAt(_chaseTarget);
   }
 }

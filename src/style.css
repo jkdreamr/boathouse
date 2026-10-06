@@ -122,3 +122,31 @@ body.row #help { bottom: auto; top: 64px; }
   .side { justify-content: center; }
   .stats b { font-size: 20px; }
 }
+
+/* [realism:stroke] */
+.stats { grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; }
+.rudderStat { min-width: 88px; }
+.rudderEnds {
+  display: flex; justify-content: space-between; width: 90px; margin: 0 auto 3px;
+  font: 600 9px ui-monospace, monospace; opacity: 0.65;
+}
+.rudderTrack {
+  position: relative; width: 90px; height: 10px; margin: 0 auto 4px;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, 0.1);
+}
+.rudderTrack::after {
+  content: ''; position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px;
+  background: rgba(255, 255, 255, 0.45);
+}
+.rudderTrack i {
+  position: absolute; z-index: 1; left: 50%; top: -2px; width: 8px; height: 12px;
+  transform: translateX(-50%); border-radius: 4px; background: var(--ink);
+}
+.pressure { display: flex; gap: 2px; align-items: center; }
+.pressure button { padding: 8px 10px; border-radius: 999px; font-size: 12px; }
+.pressure button[aria-pressed='true'] { background: var(--cardinal); border-color: rgba(255, 255, 255, 0.38); }
+@media (max-width: 640px) {
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
+  .controls { gap: 8px; }
+  .pressure button { padding: 8px 12px; }
+}
