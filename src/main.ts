@@ -9,6 +9,8 @@ import { setMaxAnisotropy } from './textures';
 import { buildBoathouse, BALCONY_Y } from './world/boathouse';
 import { Environment, PRESETS } from './world/env';
 import { buildBackdrop } from './world/props';
+// [realism:birds]
+import { initBirds } from './world/birds';
 import { buildSite, DOCK, DOCK_Y, MOORING } from './world/site';
 import { buildTerrain, PAD_Y } from './world/terrain';
 
@@ -292,6 +294,10 @@ function frame() {
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
+
+// [realism:birds]
+const birdFocus = new THREE.Vector3();
+initBirds(scene, () => (mode === 'row' ? birdFocus.set(eight.x, conditions.level, eight.z) : player.pos), { muted: () => sound.muted });
 
 syncUI();
 frame();
