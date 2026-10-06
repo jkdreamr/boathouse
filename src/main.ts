@@ -222,7 +222,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Digit1') setPressure(0);
     if (e.code === 'Digit2') setPressure(1);
     if (e.code === 'Digit3') setPressure(2);
-    if (e.code === 'KeyR' && !e.repeat && eight.aground) eight.backStroke();
+    if (e.code === 'KeyR' && !e.repeat) eight.backStroke();
     if (e.code === 'Escape' && !locked()) toWalk();
   }
 });
@@ -262,9 +262,12 @@ function frame() {
   time += dt;
   updateConditions(dt);
   for (const system of systems) system.update(dt, time);
+  const moored = mode !== 'row';
   if (mode === 'row') {
     const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
     if (keys.has('Space') && !eight.catchQueued && time - lastTap >= 60 / eight.rate) strokeUI();
+    // [realism:stroke]
+    eight.moored = moored;
     eight.update(dt, steer, time);
     if (eight.aground && !wasAground) toast('Aground. Back it down.', 4);
     wasAground = eight.aground;
@@ -272,6 +275,8 @@ function frame() {
     eight.applyCamera(camera, coxYaw, coxPitch, chase, dt);
     sound.setSpeed(Math.abs(eight.speed));
   } else {
+    // [realism:stroke]
+    eight.moored = moored;
     eight.update(dt, 0, time);
     if (mode === 'walk') {
       const fell = player.update(dt, locked() ? keys : none);

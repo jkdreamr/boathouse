@@ -85,6 +85,7 @@ export class CrewBoat {
   distance = 0;
   heading = 0;
   spm = 0;
+  moored = false;
   pressure: 0 | 1 | 2 = 1;
   rudder = 0;
   hands = 0;
@@ -149,7 +150,6 @@ export class CrewBoat {
     this.totalMass = this.hullData.shell + this.rowerMass + this.hullData.cox;
     this.lateralMass = this.totalMass * 1.5;
     this.coxX = -this.hullSpec.length / 2 + 0.85;
-    this.coxPosition = new THREE.Vector3(this.coxX + 0.05, 0.92, 0);
     this.randomSeed = { value: 9173 + cls.length * 383 };
     const group = this.group;
     group.rotation.order = 'YZX';
@@ -200,6 +200,7 @@ export class CrewBoat {
       group.add(coxSeat);
     }
     this.cox = new Coxswain({ seed: 9173, coxX: this.coxX, spec: this.hullSpec, withFigure: this.hasCox });
+    this.coxPosition = this.cox.eye;
     group.add(this.cox.group);
 
     const alu = new THREE.MeshStandardMaterial({ color: '#c3c6c9', roughness: 0.3, metalness: 0.85 });
@@ -623,6 +624,14 @@ export class CrewBoat {
     this.wasAground = aground;
   }
 
+  private updateRoll(h: number, mode: CrewState, progress: number) {
+    const rollTarget = 0.004 * this.rudder / 0.262;
+    const zeta = mode === 'drive' || (mode === 'back' && progress >= 0.3 && progress <= 0.7) ? 0.85 : 0.25;
+    const omega = (2 * Math.PI) / 1.2;
+    this.rollRate += (-omega * omega * (this.roll - rollTarget) - 2 * zeta * omega * this.rollRate) * h;
+    this.roll = clamp(this.roll + this.rollRate * h, -0.035, 0.035);
+  }
+
   private step(h: number, steer: number, now: number) {
     const handTarget = clamp(-steer, -1, 1);
     this.limitedHands += clamp(handTarget - this.limitedHands, -3 * h, 3 * h);
@@ -640,6 +649,18 @@ export class CrewBoat {
     const crewX = this.crewOffset(mode, progress);
     this.crewSpeed = (crewX - this.previousCrewX) / h;
     this.previousCrewX = crewX;
+    if (this.moored) {
+      this.propulsiveForce = 0;
+      this.crewSpeed = 0;
+      this.momentum = 0;
+      this.speed = 0;
+      this.lateralSpeed = 0;
+      this.yawRate = 0;
+      this.updateRoll(h, mode, progress);
+      this.advanceState(h, now);
+      return;
+    }
+
     const vb = this.momentum / this.totalMass - (this.rowerMass / this.totalMass) * this.crewSpeed;
     const heading = this.heading;
     _fwd.set(Math.cos(heading), 0, -Math.sin(heading));
@@ -692,11 +713,7 @@ export class CrewBoat {
     }
     this.distance += Math.hypot(_ground.x, _ground.z) * h;
 
-    const rollTarget = 0.004 * this.rudder / 0.262;
-    const zeta = mode === 'drive' || (mode === 'back' && progress >= 0.3 && progress <= 0.7) ? 0.85 : 0.25;
-    const omega = (2 * Math.PI) / 1.2;
-    this.rollRate += (-omega * omega * (this.roll - rollTarget) - 2 * zeta * omega * this.rollRate) * h;
-    this.roll = clamp(this.roll + this.rollRate * h, -0.035, 0.035);
+    this.updateRoll(h, mode, progress);
 
     this.advanceState(h, now);
     this.sampleGround();
@@ -715,7 +732,9 @@ export class CrewBoat {
     for (let i = 0; i < count; i++) this.step(h, clamp(steer, -1, 1), start + (i + 1) * h);
     this.time = time;
     if (Number.isFinite(this.lastCatch) && time - this.lastCatch > 5) this.spm = 0;
-    this.group.position.y = conditions.level - 0.01 * (this.propulsiveForce / Math.max(1, this.seatCount * FPK[this.pressure])) + 0.004 * Math.sin(1.6 * time);
+    if (!this.moored) {
+      this.group.position.y = conditions.level - 0.01 * (this.propulsiveForce / Math.max(1, this.seatCount * FPK[this.pressure])) + 0.004 * Math.sin(1.6 * time);
+    }
     this.group.rotation.set(this.roll, this.heading, -0.015 * this.crewOffset(this.state, this.state === 'drive' ? this.driveElapsed / Math.max(this.driveDuration, 1e-3) : this.state === 'recovery' ? this.recoveryProgress : this.state === 'back' ? this.backElapsed / 2.2 : 0));
     this.pose();
     if (this.cox) {
