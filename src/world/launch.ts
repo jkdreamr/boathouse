@@ -19,6 +19,7 @@ export class PlayerLaunch {
   heading = 0;
   speed = 0;
   distance = 0;
+  onboardView = false;
   private wakeDistance = 0;
   private motor: THREE.Group;
 
@@ -40,6 +41,7 @@ export class PlayerLaunch {
     this.speed = 0;
     this.distance = 0;
     this.wakeDistance = 0;
+    this.onboardView = false;
   }
 
   private navigable(x: number, z: number, h: number) {
@@ -116,9 +118,14 @@ export class PlayerLaunch {
   applyCamera(camera: THREE.PerspectiveCamera) {
     const c = Math.cos(this.heading);
     const s = Math.sin(this.heading);
-    _cam.set(this.x - c * 8 + s * 2, this.group.position.y + 4, this.z + s * 8 + c * 2);
+    if (this.onboardView) {
+      _cam.set(this.x - c * 1.35 + s * 0.2, this.group.position.y + 1.2, this.z + s * 1.35 + c * 0.2);
+      _target.set(this.x + c * 11, this.group.position.y + 0.95, this.z - s * 11);
+    } else {
+      _cam.set(this.x - c * 8 + s * 2, this.group.position.y + 4, this.z + s * 8 + c * 2);
+      _target.set(this.x + c * 2, this.group.position.y + 0.5, this.z - s * 2);
+    }
     camera.position.lerp(_cam, 0.15);
-    _target.set(this.x + c * 2, this.group.position.y + 0.5, this.z - s * 2);
     camera.lookAt(_target);
   }
 }
