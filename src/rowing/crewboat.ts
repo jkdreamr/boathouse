@@ -781,7 +781,7 @@ export class CrewBoat {
     if (!chase && this.hasCox) {
       this.cox?.setFirstPerson(true);
       cam.position.copy(this.coxPosition).applyMatrix4(group.matrixWorld);
-      _lookEuler.set(pitchOff - 0.12, -Math.PI / 2 + yawOff, 0, 'YXZ');
+      _lookEuler.set(pitchOff - 0.37, -Math.PI / 2 + yawOff, 0, 'YXZ');
       _localQ.setFromEuler(_lookEuler);
       group.getWorldQuaternion(_boatQ);
       cam.quaternion.copy(_boatQ).multiply(_localQ);
@@ -790,14 +790,15 @@ export class CrewBoat {
     }
     this.cox?.setFirstPerson(false);
     const angle = this.heading + yawOff;
-    _a.set(group.position.x - Math.cos(angle) * 17, group.position.y + 6.5 + pitchOff * 8, group.position.z + Math.sin(angle) * 17);
+    const height = THREE.MathUtils.clamp(6.5 + pitchOff * 8, 2.5, 14);
+    _a.set(group.position.x - Math.cos(angle) * 17, group.position.y + height, group.position.z + Math.sin(angle) * 17);
     if (!this.chaseInit) {
       this.chasePos.copy(_a);
       this.chaseInit = true;
     }
     this.chasePos.lerp(_a, 1 - Math.exp(-dt * 3));
     cam.position.copy(this.chasePos);
-    _chaseTarget.set(group.position.x + Math.cos(this.heading) * 5, group.position.y + 0.6, group.position.z - Math.sin(this.heading) * 5);
+    _chaseTarget.set(group.position.x + Math.cos(this.heading) * 1.8, group.position.y + 0.65, group.position.z - Math.sin(this.heading) * 1.8);
     cam.lookAt(_chaseTarget);
   }
 }

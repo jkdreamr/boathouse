@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { centerline, fbm, northBank, southBank, terrainHeight } from './terrain';
 import { conditions } from '../sim/conditions';
 import { addSystem } from '../sim/systems';
+import { mergeStaticMeshes } from './mergeStatic';
 
 // [realism:water]
 const swayUniforms = {
@@ -95,11 +96,11 @@ function cordgrassClusterGeometry() {
 function addMarshPlants(root: THREE.Group, rnd: () => number, matrix: THREE.Matrix4, color: THREE.Color) {
   const cordgrassMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', side: THREE.DoubleSide, roughness: 0.9 });
   applyWindSway(cordgrassMaterial, { stiffness: 0.012, minY: 0 });
-  const cordgrass = new THREE.InstancedMesh(cordgrassClusterGeometry(), cordgrassMaterial, 4000);
+  const cordgrass = new THREE.InstancedMesh(cordgrassClusterGeometry(), cordgrassMaterial, 3000);
   cordgrass.castShadow = false;
   cordgrass.receiveShadow = false;
   let cordCount = 0;
-  for (let attempt = 0; cordCount < cordgrass.count && attempt < 24000; attempt++) {
+  for (let attempt = 0; cordCount < cordgrass.count && attempt < 18000; attempt++) {
     const x = -900 + rnd() * 2700;
     const southSide = rnd() < 0.5;
     if (southSide && x >= -152 && x <= 172) continue;
@@ -122,14 +123,14 @@ function addMarshPlants(root: THREE.Group, rnd: () => number, matrix: THREE.Matr
   root.add(cordgrass);
 
   const pickleweed = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(1, 8, 6),
+    new THREE.SphereGeometry(1, 6, 4),
     new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9 }),
-    2500,
+    1800,
   );
   pickleweed.castShadow = false;
   pickleweed.receiveShadow = false;
   let pickleCount = 0;
-  for (let attempt = 0; pickleCount < pickleweed.count && attempt < 18000; attempt++) {
+  for (let attempt = 0; pickleCount < pickleweed.count && attempt < 14000; attempt++) {
     const x = -900 + rnd() * 2700;
     const southSide = rnd() < 0.5;
     if (southSide && x >= -152 && x <= 172) continue;
@@ -225,6 +226,7 @@ export function buildBackdrop(scene: THREE.Scene) {
   // [realism:water]
   const tidalProps = new THREE.Group();
   tidalProps.position.y = conditions.level;
+  tidalProps.userData.staticMergeExclude = true;
   root.add(tidalProps);
   addSystem({ update: () => (tidalProps.position.y = conditions.level) });
 
@@ -281,7 +283,7 @@ export function buildBackdrop(scene: THREE.Scene) {
   // [realism:water]
   const tuftMaterial = new THREE.MeshLambertMaterial({ color: '#6f7440' });
   applyWindSway(tuftMaterial, { stiffness: 0.012, minY: 0 });
-  const tufts = new THREE.InstancedMesh(tuft, tuftMaterial, 1800);
+  const tufts = new THREE.InstancedMesh(tuft, tuftMaterial, 1200);
   const col = new THREE.Color();
   let seed = 11;
   const rnd = () => {
@@ -361,5 +363,7 @@ export function buildBackdrop(scene: THREE.Scene) {
   });
   // [realism:water]
   tidalProps.add(buoys);
+  mergeStaticMeshes(root);
+  root.traverse((object) => object.layers.set(1));
   return root;
 }

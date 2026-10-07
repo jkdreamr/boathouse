@@ -9,6 +9,7 @@ import { PAD, PAD_Y } from './terrain';
 import { conditions, KT } from '../sim/conditions';
 import { addSystem } from '../sim/systems';
 import { applyWindSway } from './props';
+import { mergeStaticMeshes } from './mergeStatic';
 
 export const DOCK_Y = 0.5;
 export const DOCK = { minX: -45, maxX: 45, minZ: -14.2, maxZ: -11 };
@@ -18,8 +19,10 @@ export const dockDeckY = () => DOCK_Y + conditions.level;
 export const MOORING = new THREE.Vector3(0, 0, -18);
 export const floatingDock = new THREE.Group();
 floatingDock.name = 'floating-dock';
+floatingDock.userData.staticMergeExclude = true;
 export const gangway = new THREE.Group();
 gangway.name = 'gangway';
+gangway.userData.staticMergeExclude = true;
 
 function decal(x0: number, x1: number, z0: number, z1: number, mat: THREE.Material, y = PAD_Y + 0.006) {
   const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
@@ -540,6 +543,7 @@ export function buildSite(scene: THREE.Scene) {
   root.add(windsockPole);
   addWall(5.35, 5.65, 0.85, 1.15, PAD_Y, PAD_Y + 5);
   const windsockRoot = new THREE.Group();
+  windsockRoot.userData.staticMergeExclude = true;
   windsockRoot.position.set(5.5, PAD_Y + 5, 1.0);
   root.add(windsockRoot);
   const windsock = new THREE.Mesh(
@@ -583,14 +587,18 @@ export function buildSite(scene: THREE.Scene) {
   ];
   const pileMat = new THREE.MeshStandardMaterial({ map: pileTexture(), roughness: 0.86 });
   const capMat = M.white;
-  for (const [x, z] of pileSpots) {
-    const p = mesh(new THREE.CylinderGeometry(0.22, 0.22, 9, 16, 24), pileMat);
-    p.position.set(x, -0.5, z);
-    root.add(p);
-    const c = mesh(new THREE.ConeGeometry(0.24, 0.3, 12), capMat);
-    c.position.set(x, 4.15, z);
-    root.add(c);
-  }
+  const pilings = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, 9, 16, 1), pileMat, pileSpots.length);
+  const pileCaps = new THREE.InstancedMesh(new THREE.ConeGeometry(0.24, 0.3, 12), capMat, pileSpots.length);
+  const pileMatrix = new THREE.Matrix4();
+  pileSpots.forEach(([x, z], i) => {
+    pileMatrix.makeTranslation(x, -0.5, z);
+    pilings.setMatrixAt(i, pileMatrix);
+    pileMatrix.makeTranslation(x, 4.15, z);
+    pileCaps.setMatrixAt(i, pileMatrix);
+  });
+  pilings.instanceMatrix.needsUpdate = true;
+  pileCaps.instanceMatrix.needsUpdate = true;
+  root.add(pilings, pileCaps);
   const hoopGeometry = new THREE.TorusGeometry(0.34, 0.035, 8, 24);
   hoopGeometry.rotateX(Math.PI / 2);
   const guideHoops = new THREE.InstancedMesh(hoopGeometry, M.darkSteel, pileSpots.length);
@@ -637,5 +645,6 @@ export function buildSite(scene: THREE.Scene) {
   floatingDock.add(ship);
   const msiFloat = floatBox(30, 2.6, 85, -16.3, M.deckGray);
   floatingDock.add(msiFloat);
+  mergeStaticMeshes(root);
   return root;
 }

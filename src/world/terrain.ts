@@ -101,7 +101,7 @@ export function terrainHeight(x: number, z: number) {
 // [realism:water]
 function rows(): number[] {
   const out: number[] = [];
-  for (let z = -2400; z < -460; z += 40) out.push(z);
+  for (let z = -2400; z < -460; z += 80) out.push(z);
   for (let z = -460; z < -60; z += 4) out.push(z);
   for (let z = -60; z <= 10; z += 2) out.push(z);
   for (let z = 12; z < 200; z += 4) out.push(z);
@@ -111,7 +111,9 @@ function rows(): number[] {
 
 export function buildTerrain() {
   const xs: number[] = [];
-  for (let x = -3200; x <= 5200; x += 12) xs.push(x);
+  for (let x = -3200; x < -600; x += 24) xs.push(x);
+  for (let x = -600; x <= 600; x += 12) xs.push(x);
+  for (let x = 612; x <= 5200; x += 24) xs.push(x);
   const zs = rows();
   const nx = xs.length;
   const nz = zs.length;
@@ -219,5 +221,6 @@ roughnessFactor = mix(roughnessFactor, 0.04, realismPuddles);`,
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
+  mesh.layers.set(1);
   return mesh;
 }

@@ -12,8 +12,8 @@ import { WakeField } from './traffic/wake';
 
 /** Max craft simultaneously near the camera (fully simulated + rendered); the motorboat waits for a slot. */
 const MAX_ACTIVE = 10;
-const NEAR = 1800;
-const DETAIL = 700;
+const NEAR = 600;
+const DETAIL = 150;
 
 class PlayerBody implements Body {
   x = 0;

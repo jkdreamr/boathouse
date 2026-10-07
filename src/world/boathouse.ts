@@ -11,6 +11,7 @@ import { extMats } from './exterior/extMats';
 import { buildFlagpole } from './exterior/flag';
 import { addSeams, buildRoofTrim } from './exterior/roofing';
 import { buildInterior } from './interior';
+import { mergeStaticMeshes } from './mergeStatic';
 
 export { BALCONY_Y, BAYS };
 
@@ -314,5 +315,6 @@ export function buildBoathouse(scene: THREE.Scene) {
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh && !(o as THREE.InstancedMesh).isInstancedMesh) o.matrixAutoUpdate = true;
   });
+  mergeStaticMeshes(root);
   return root;
 }

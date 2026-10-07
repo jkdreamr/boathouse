@@ -38,7 +38,7 @@ export class Coxswain {
     this.withFigure = opts.withFigure;
     this.spec = opts.spec;
     this.coxX = opts.coxX;
-    this.eye = new THREE.Vector3(this.coxX, 0.8, 0);
+    this.eye = new THREE.Vector3(this.coxX - 0.5, 0.84, 0);
     const dark = new THREE.MeshStandardMaterial({ color: DARK, roughness: 0.65, metalness: 0.2 });
     const carbon = new THREE.MeshStandardMaterial({ color: '#191a1c', roughness: 0.46, metalness: 0.55 });
     const white = new THREE.MeshStandardMaterial({ color: WHITE, roughness: 0.65 });
@@ -82,14 +82,14 @@ export class Coxswain {
         fairlead.position.set(this.coxX + 0.6, gunwale + 0.01, side * 0.21);
         this.group.add(fairlead);
       }
-      const toggleGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.07, 8);
+      const toggleGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.1, 8);
       for (const side of [-1, 1]) {
         const toggle = new THREE.Mesh(toggleGeo, white);
         toggle.rotation.z = Math.PI / 2;
         toggle.position.set(this.coxX + 0.32, gunwale + 0.03, side * 0.24);
         this.group.add(toggle);
         this.toggles.push(toggle);
-        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), cardinal);
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.024, 8, 6), cardinal);
         marker.position.set(this.coxX + 0.32, gunwale + 0.03, side * 0.24);
         this.group.add(marker);
         this.toggleMarkers.push(marker);
@@ -252,10 +252,10 @@ export class Coxswain {
         const y = gunwale + 0.01;
         const startX = xt + Math.sin(rudder) * side * 0.15;
         const startZ = Math.cos(rudder) * side * 0.15;
-        between(this.steeringLines[i], _a.set(startX, y, startZ), _b.set(lineX, y, side * 0.21), 0.003);
+        between(this.steeringLines[i], _a.set(startX, y, startZ), _b.set(lineX, y, side * 0.21), 0.005);
       }
-      between(this.steeringLines[2], _a.set(this.coxX + 0.6, gunwale + 0.01, zPort), _b.set(this.coxX + 0.6, gunwale + 0.01, zStarboard), 0.003);
-      between(this.steeringLines[3], _a.set(xt + Math.sin(rudder) * -0.15, gunwale + 0.01, -0.15), _b.set(xt + Math.sin(rudder) * 0.15, gunwale + 0.01, 0.15), 0.003);
+      between(this.steeringLines[2], _a.set(this.coxX + 0.6, gunwale + 0.01, zPort), _b.set(this.coxX + 0.6, gunwale + 0.01, zStarboard), 0.005);
+      between(this.steeringLines[3], _a.set(xt + Math.sin(rudder) * -0.15, gunwale + 0.01, -0.15), _b.set(xt + Math.sin(rudder) * 0.15, gunwale + 0.01, 0.15), 0.005);
 
       const sway = Math.sin(time * 0.8) * 0.004;
       if (this.figureGroup) {

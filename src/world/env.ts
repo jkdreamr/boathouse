@@ -154,9 +154,9 @@ void main() {
   // slow, very long modulation so tiling never reads
   vec2 big = tangentAt(xz / 1091.0 + vec2(time / 109.0, time / 113.0)) + tangentAt(xz / 3307.0 - vec2(time / 211.0, 0.0));
   t += big * 0.12;
-  float ta = amp * 1.35;
+  float ta = min(0.7, amp * 0.55);
   vec2 tw = (t.x * wd + t.y * 0.8 * wp) * ta;
-  vec3 surfaceNormal = normalize(vec3(tw.x, 1.0, tw.y) + vec3(big.x, 0.0, big.y) * 0.012);
+  vec3 surfaceNormal = normalize(vec3(tw.x, 1.0, tw.y) + vec3(big.x, 0.0, big.y) * 0.004);
 
   vec3 worldToEye = eye - worldPosition.xyz;
   vec3 eyeDirection = normalize(worldToEye);
@@ -168,7 +168,7 @@ void main() {
   sunLight(surfaceNormal, eyeDirection, shiny, 1.6 + 0.8 * amp, 0.5, diffuseLight, specularLight);
 
   // distortion grows with chop but is capped near the camera so close-up reflections never tear into contours
-  vec2 distortion = surfaceNormal.xz * (0.0025 + 0.45 / (distance + 14.0)) * distortionScale;
+  vec2 distortion = surfaceNormal.xz * (0.001 + 0.18 / (distance + 28.0)) * distortionScale;
   vec3 reflectionSample = vec3(texture2D(mirrorSampler, mirrorCoord.xy / mirrorCoord.w + distortion));
 
   float theta = max(dot(eyeDirection, surfaceNormal), 0.0);
@@ -330,7 +330,7 @@ export class Environment {
     // ripple tile shrinks toward short capillary ripples in light air, grows with the chop's wavelength
     const tile = 6 + 1.2 * U;
     u.size.value = 103 / tile;
-    u.distortionScale.value = 0.18 + 0.9 * chop;
+    u.distortionScale.value = Math.min(0.42, 0.06 + 0.34 * chop);
     tmpWind.set(Math.cos(this.windAngle), Math.sin(this.windAngle));
     const target = Math.atan2(conditions.wind.y, conditions.wind.x);
     let d = target - this.windAngle;

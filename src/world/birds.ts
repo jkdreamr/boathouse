@@ -86,6 +86,7 @@ class Pool {
   private anim: THREE.InstancedBufferAttribute;
   private neck: THREE.InstancedBufferAttribute;
   private used = 0;
+  private writeCount = 0;
   private static m = new THREE.Matrix4();
   private static q = new THREE.Quaternion();
   private static e = new THREE.Euler(0, 0, 0, 'YZX');
@@ -107,6 +108,8 @@ class Pool {
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = true;
     this.mesh.name = 'birds-' + key;
+    this.mesh.layers.set(1);
+    this.mesh.count = 0;
     for (let i = 0; i < cap; i++) this.mesh.setMatrixAt(i, Pool.zero);
     scene.add(this.mesh);
   }
@@ -115,18 +118,20 @@ class Pool {
     return this.used++;
   }
 
-  write(i: number, b: Bird) {
-    Pool.q.setFromEuler(Pool.e.set(b.bank, b.yaw, b.pitch));
-    this.mesh.setMatrixAt(i, Pool.m.compose(b.p, Pool.q, Pool.one));
-    this.anim.setXYZW(i, b.a1, b.a2, b.fold, b.legs);
-    this.neck.setX(i, b.neck);
+  begin() {
+    this.writeCount = 0;
   }
 
-  hide(i: number) {
-    this.mesh.setMatrixAt(i, Pool.zero);
+  write(_slot: number, b: Bird, detail: boolean) {
+    const i = this.writeCount++;
+    Pool.q.setFromEuler(Pool.e.set(b.bank, b.yaw, b.pitch));
+    this.mesh.setMatrixAt(i, Pool.m.compose(b.p, Pool.q, Pool.one));
+    this.anim.setXYZW(i, detail ? b.a1 : 0, detail ? b.a2 : 0, detail ? b.fold : 0, detail ? b.legs : 0);
+    this.neck.setX(i, detail ? b.neck : 0);
   }
 
   flush() {
+    this.mesh.count = this.writeCount;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.anim.needsUpdate = true;
     this.neck.needsUpdate = true;
@@ -157,6 +162,7 @@ class Splashes {
     this.mesh = new THREE.InstancedMesh(geo, mat, 10);
     this.mesh.frustumCulled = false;
     this.mesh.name = 'bird-splashes';
+    this.mesh.layers.set(1);
     for (let i = 0; i < 10; i++) {
       this.items.push({ x: 0, y: 0, z: 0, age: 1, life: 1, size: 0 });
       this.mesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0));
@@ -343,19 +349,13 @@ class Bird {
     this.flapGoal = 0;
   }
 
-  write() {
+  write(detail = true) {
     const [fp, fi] = this.flySlot;
-    if (this.mode === 'under') {
-      fp.hide(fi);
-      if (this.standSlot) this.standSlot[0].hide(this.standSlot[1]);
-      return;
-    }
+    if (this.mode === 'under') return;
     if (this.standSlot && this.standing) {
-      fp.hide(fi);
-      this.standSlot[0].write(this.standSlot[1], this);
+      this.standSlot[0].write(this.standSlot[1], this, detail);
     } else {
-      if (this.standSlot) this.standSlot[0].hide(this.standSlot[1]);
-      fp.write(fi, this);
+      fp.write(fi, this, detail);
     }
   }
 
@@ -434,6 +434,7 @@ export function initBirds(scene: THREE.Scene, getPlayerPos: () => THREE.Vector3,
   pilings.castShadow = true;
   pilings.receiveShadow = true;
   pilings.name = 'bird-pilings';
+  pilings.layers.set(1);
   scene.add(pilings);
   const perches: Perch[] = pilingSpots.map((s, i) => ({
     x: s.x + Math.sin(s.lean) * 0.3,
@@ -1211,13 +1212,15 @@ export function initBirds(scene: THREE.Scene, getPlayerPos: () => THREE.Vector3,
     step(dt: number) {
       player.copy(getPlayerPos());
       calls.tick(dt);
+      for (const pool of Object.values(pools)) pool.begin();
       if (flock.flying) {
         flock.cx += Math.sign(flock.goal - flock.cx) * Math.min(Math.abs(flock.goal - flock.cx), 12 * dt);
         if (Math.abs(flock.goal - flock.cx) < 1) flock.flying = false;
       }
       for (const b of birds) {
         updateBird(b, dt);
-        b.write();
+        const distance = Math.hypot(b.p.x - player.x, b.p.z - player.z);
+        if (distance < 600) b.write(distance <= 150);
       }
       for (const k in pools) pools[k as keyof typeof pools].flush();
       splashes.update(dt);

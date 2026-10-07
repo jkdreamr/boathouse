@@ -10,6 +10,7 @@ import { Batch, xform } from './interior/batch';
 import { imats, IMats } from './interior/imats';
 import { Atlas, rand } from './interior/atlas';
 import * as P from './interior/props';
+import { mergeStaticMeshes } from './mergeStatic';
 
 /*
  * Arrillaga Family Rowing & Sailing Center interior. gostanford.com describes a two-story,
@@ -175,6 +176,45 @@ function shellGeometry(cls: BoatClass, color: string, wood = false) {
   return merged;
 }
 
+const hiddenShellMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+
+class RackShellProxy extends THREE.Mesh {
+  private isVisible = true;
+
+  constructor(
+    private readonly instances: THREE.InstancedMesh,
+    private readonly index: number,
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    position: THREE.Vector3,
+    heading: number,
+    color: string,
+  ) {
+    super(geometry, material);
+    this.userData.color = color;
+    this.position.copy(position);
+    this.rotation.set(Math.PI, heading, 0, 'YXZ');
+    this.castShadow = false;
+    this.receiveShadow = true;
+    Object.defineProperty(this, 'visible', {
+      configurable: true,
+      get: () => this.isVisible,
+      set: (visible: boolean) => {
+        this.isVisible = visible;
+        this.syncInstance();
+      },
+    });
+    this.syncInstance();
+  }
+
+  private syncInstance() {
+    this.updateMatrix();
+    this.instances.setMatrixAt(this.index, this.isVisible ? this.matrix : hiddenShellMatrix);
+    this.instances.instanceMatrix.needsUpdate = true;
+    this.instances.computeBoundingSphere();
+  }
+}
+
 function mergeVC(parts: THREE.BufferGeometry[]) {
   const total = parts.reduce((s, g) => s + g.attributes.position.count, 0);
   const pos = new Float32Array(total * 3);
@@ -240,6 +280,7 @@ export function buildInterior(scene: THREE.Scene) {
   const root = new THREE.Group();
   root.name = 'interior';
   scene.add(root);
+  const shellPools = new Map<string, { mesh: THREE.InstancedMesh; next: number }>();
   const b = new Batch();
   const atlas = new Atlas();
 
@@ -358,14 +399,20 @@ export function buildInterior(scene: THREE.Scene) {
           let m: THREE.Mesh | null = null;
           if (!EMPTY.has(id)) {
             const col = SHELL_COLORS[COLOR_CYCLE[colorIdx++ % COLOR_CYCLE.length]];
-            m = new THREE.Mesh(shellGeometry(cls, col), I.hull);
+            const key = `${cls}:${col}`;
+            let pool = shellPools.get(key);
+            if (!pool) {
+              const instances = new THREE.InstancedMesh(shellGeometry(cls, col), I.hull, 128);
+              instances.count = 0;
+              instances.name = `rack-shells:${key}`;
+              instances.castShadow = false;
+              instances.receiveShadow = true;
+              root.add(instances);
+              pool = { mesh: instances, next: 0 };
+              shellPools.set(key, pool);
+            }
+            m = new RackShellProxy(pool.mesh, pool.next++, shellGeometry(cls, col), I.hull, pos, STORED_HEADING, col);
             m.name = `shell:${id}`;
-            m.userData.color = col;
-            m.position.copy(pos);
-            m.rotation.set(Math.PI, STORED_HEADING, 0, 'YXZ');
-            m.castShadow = false;
-            m.receiveShadow = true;
-            root.add(m);
           }
           const slot: RackSlot = { id, cls, name, pos, heading: STORED_HEADING, tier: ti, mesh: m };
           rackSlots.push(slot);
@@ -925,6 +972,13 @@ export function buildInterior(scene: THREE.Scene) {
 
   atlas.finish();
   b.flush(root, { cast: false, receive: true });
+  for (const pool of shellPools.values()) {
+    pool.mesh.count = pool.next;
+    pool.mesh.instanceMatrix.needsUpdate = true;
+    pool.mesh.computeBoundingSphere();
+  }
+  mergeStaticMeshes(root);
+  root.traverse((object) => object.layers.set(1));
 }
 
 // ---------------------------------------------------------------- framed pictures

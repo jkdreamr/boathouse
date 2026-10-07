@@ -80,5 +80,5 @@ export function deckGeometry(spec: HullSpec, x0: number, x1: number, n = 24) {
 
 /** Hull + decks merged, for stored boats on racks (closed deck so it reads as a shell from any angle). */
 export function storedHullGeometry(spec: HullSpec) {
-  return hullGeometry(spec, 48, 12);
+  return hullGeometry(spec, 40, 10);
 }

@@ -34,6 +34,7 @@ setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 60000);
+camera.layers.enable(1);
 const env = new Environment(scene, renderer);
 scene.add(buildTerrain());
 buildSite(scene);
@@ -42,6 +43,7 @@ buildBackdrop(scene);
 
 const eight = new CrewBoat(scene, '8+');
 eight.reset(MOORING, 0);
+eight.group.traverse((object) => object.layers.set(1));
 const sound = new Sound();
 eight.onCatch = () => sound.catch();
 eight.onFinish = () => sound.finish();
@@ -86,6 +88,11 @@ function toast(msg: string, secs = 3) {
   toastTimer = secs;
 }
 
+function clearToast() {
+  toastTimer = 0;
+  $('toast').classList.add('hidden');
+}
+
 function lock() {
   try {
     const r = canvas.requestPointerLock() as unknown as Promise<void> | undefined;
@@ -103,10 +110,10 @@ function nearBoat() {
 
 // [realism:stroke]
 function setHelp() {
-  $('help').innerHTML =
+  $('help').textContent =
     mode === 'row'
-      ? '<kbd>Space</kbd> stroke (tap the rhythm, hold to keep it) · <kbd>A</kbd>/<kbd>D</kbd> steer · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> pressure · <kbd>R</kbd> back it down · drag to look · <kbd>C</kbd> camera · <kbd>Esc</kbd> walk'
-      : '<kbd>WASD</kbd> walk · <kbd>Shift</kbd> run · <kbd>Space</kbd> jump · <kbd>E</kbd> board the 8+ at the dock · <kbd>T</kbd> time of day · <kbd>Esc</kbd> release mouse';
+      ? `Space to stroke (tap the rhythm, hold to keep it) · A/D to steer · 1–3 pressure${eight.aground ? ' · R to back it down' : ''} · C camera · Esc to walk`
+      : 'WASD to walk · Shift to run · Space to jump · E to board the varsity eight · T for time of day · Esc to release the mouse';
 }
 
 function syncUI() {
@@ -116,7 +123,7 @@ function syncUI() {
   $('rowPanel').classList.toggle('hidden', mode !== 'row');
   $('reticle').classList.toggle('hidden', mode !== 'walk');
   $('pause').classList.toggle('hidden', !(mode === 'walk' && !locked()));
-  $('modeChip').textContent = mode === 'row' ? 'ROWING' : 'WALK';
+  $('modeChip').textContent = mode === 'row' ? 'Rowing' : 'Walking';
   $('dockBtn').textContent = mode === 'row' ? 'Back to the dock' : 'Go to the dock';
   if (mode !== 'walk') $('prompt').classList.add('hidden');
   setHelp();
@@ -124,6 +131,7 @@ function syncUI() {
 
 // [realism:stroke] [realism:handling]
 function board(inPlace = false) {
+  clearToast();
   mode = 'row';
   chase = false;
   coxYaw = 0;
@@ -134,10 +142,11 @@ function board(inPlace = false) {
   if (!inPlace) eight.reset(MOORING, 0); // [realism:handling]
   sound.start();
   syncUI();
-  toast('You’re in the cox seat. Press Space or STROKE to row.', 4);
+  toast('You’re in the cox seat. Press Space or Stroke to row.', 4);
 }
 
 function toWalk() {
+  clearToast();
   mode = 'walk';
   keys.clear();
   if (locked()) document.exitPointerLock();
@@ -307,6 +316,7 @@ function frame() {
     eight.moored = moored;
     eight.update(dt, steer, time);
     if (eight.aground && !wasAground) toast('Aground. Back it down.', 4);
+    if (eight.aground !== wasAground) setHelp();
     wasAground = eight.aground;
     eight.group.updateMatrixWorld();
     eight.applyCamera(camera, coxYaw, coxPitch, chase, dt);
@@ -348,6 +358,10 @@ function frame() {
       $('dist').textContent = eight.distance.toFixed(0);
       $('where').textContent = `${eight.phase} · Redwood Creek`;
       $('rudderMarker').style.left = `${50 + (eight.rudder / 0.262) * 50}%`;
+      const rp = handling.rowPrompt(); // [realism:handling]
+      const pr = $('prompt');
+      pr.classList.toggle('hidden', rp === null);
+      if (rp !== null) pr.textContent = rp;
       for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pressure]')) {
         button.setAttribute('aria-pressed', button.dataset.pressure === String(eight.pressure) ? 'true' : 'false');
       }
@@ -357,12 +371,7 @@ function frame() {
       const show = locked() && (hp !== null || nearBoat());
       const pr = $('prompt');
       pr.classList.toggle('hidden', !show);
-      if (show) pr.innerHTML = hp ?? '<kbd>E</kbd> or click: cox the varsity 8+'; // [realism:handling]
-    } else {
-      const rp = handling.rowPrompt(); // [realism:handling]
-      const pr = $('prompt');
-      pr.classList.toggle('hidden', rp === null);
-      if (rp !== null) pr.innerHTML = rp;
+      if (show) pr.textContent = hp ?? 'Press E to cox the varsity eight'; // [realism:handling]
     }
   }
   if (toastTimer > 0) {

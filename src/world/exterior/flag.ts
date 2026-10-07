@@ -40,6 +40,7 @@ export function buildFlagpole(root: THREE.Group, x: number, y0: number, z: numbe
     V[i] = Math.min(1, Math.max(0, 0.5 - pos.getY(i) / HOIST));
   }
   const flag = new THREE.Mesh(geo, E.flag);
+  flag.userData.staticMergeExclude = true;
   flag.castShadow = true;
   flag.frustumCulled = false;
   const holder = new THREE.Group();
