@@ -787,7 +787,11 @@ export class CrewBoat {
     this.cox?.setFirstPerson(false);
     const angle = this.heading + yawOff;
     const height = THREE.MathUtils.clamp(6.5 + pitchOff * 8, 2.5, 14);
-    _a.set(group.position.x - Math.cos(angle) * 17, group.position.y + height, group.position.z + Math.sin(angle) * 17);
+    _a.set(
+      group.position.x - Math.cos(angle) * 12 + Math.sin(angle) * 4,
+      group.position.y + height,
+      group.position.z + Math.sin(angle) * 12 + Math.cos(angle) * 4,
+    );
     if (!this.chaseInit) {
       this.chasePos.copy(_a);
       this.chaseInit = true;

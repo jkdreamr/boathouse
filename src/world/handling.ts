@@ -9,7 +9,7 @@ import { floorAt, hitsWall } from './collide';
 import { terrainHeight } from './terrain';
 import { Y0, ZW } from './boathouseDims';
 import { BAYS, BAY_W } from './boathouseDims';
-import { DOCK, DOCK_Y, gangway } from './site';
+import { DOCK, dockDeckY, gangway } from './site';
 import { CrewFigure } from './crew';
 import { rackSlots, RackSlot } from './racks';
 
@@ -61,7 +61,9 @@ const lerpAngle = (a: number, b: number, t: number) => {
 
 function groundAt(x: number, z: number, refY: number) {
   const f = floorAt(x, z, refY + 0.55);
-  return f !== null ? f : terrainHeight(x, z);
+  if (f !== null) return f;
+  if (x >= DOCK.minX && x <= DOCK.maxX && z >= DOCK.minZ - 1 && z < DOCK.minZ) return dockDeckY();
+  return terrainHeight(x, z);
 }
 
 interface Pose {
@@ -851,7 +853,7 @@ export class Handling {
     this.oarsMode = 'hand';
     for (const c of this.crew) {
       const wx = this.pose.cx + Math.cos(this.pose.heading) * c.seatX;
-      c.pos.set(wx, DOCK_Y + conditions.level, DOCK.minZ + 0.35);
+      c.pos.set(wx, dockDeckY(), DOCK.minZ + 0.35);
       c.prev.copy(c.pos);
       c.yaw = Math.PI;
       c.oar = this.oars[c.k - 1];
@@ -995,7 +997,7 @@ export class Handling {
           const o = this.oars[i];
           o.visible = true;
           o.rotation.set(0, 0, 0);
-          o.position.set(this.pose.cx - 5 + i * 1.42, DOCK_Y + conditions.level + 0.05, DOCK.maxZ - 0.4);
+          o.position.set(this.pose.cx - 5 + i * 1.42, dockDeckY() + 0.05, DOCK.maxZ - 0.4);
         }
         this.waitE('Oars down', 'Oars down', 'waitOars');
         break;
@@ -1010,7 +1012,7 @@ export class Handling {
         this.h.enterWalk();
         const e = this.h.eight;
         const sternX = e.group.position.x - Math.cos(e.heading) * (HL - 0.6);
-        this.h.player.place(sternX, DOCK_Y + conditions.level, DOCK.minZ + 0.35, Math.PI, -0.1);
+        this.h.player.place(sternX, dockDeckY(), DOCK.minZ + 0.35, Math.PI, -0.1);
         this.waitE('One foot up and out', 'Up and out', 'u_waitOut');
         break;
       }
@@ -1020,7 +1022,7 @@ export class Handling {
           const o = this.oars[i];
           o.visible = true;
           o.rotation.set(0, 0, 0);
-          o.position.set(this.pose.cx - 5 + i * 1.42, DOCK_Y + conditions.level + 0.05, DOCK.maxZ - 0.4);
+          o.position.set(this.pose.cx - 5 + i * 1.42, dockDeckY() + 0.05, DOCK.maxZ - 0.4);
         }
         for (const c of this.crew) c.oar = null;
         this.waitE('Hands on', 'Hands on', 'u_waitHands');
@@ -1263,7 +1265,7 @@ export class Handling {
       }
       // generous refY: a rower who dips below a floor (dock edge, ramp)
       // must be able to step back up onto it instead of sinking through
-      c.pos.y = groundAt(c.pos.x, c.pos.z, Math.max(c.pos.y + 0.6, DOCK_Y + conditions.level + 1.2));
+      c.pos.y = groundAt(c.pos.x, c.pos.z, Math.max(c.pos.y + 0.6, dockDeckY() + 1.2));
       c.walkPhase += (Math.hypot(c.pos.x - c.prev.x, c.pos.z - c.prev.z) / 0.64) * Math.PI;
       c.prev.copy(c.pos);
       c.walkAmt = lerp(c.walkAmt, moving, Math.min(1, dt * 8));

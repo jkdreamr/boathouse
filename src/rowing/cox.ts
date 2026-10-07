@@ -48,7 +48,7 @@ const unitCylinder = new THREE.CylinderGeometry(1, 1, 1, 6);
 
 /** Cox build: 1.56-1.70 m, light, derived from the shared anthropometry. */
 function coxAnthro(seed: number): Anthro {
-  const base = makeAnthro(seed, 'women');
+  const base = makeAnthro(seed, 'women', { counterFree: true });
   const H = 1.56 + (base.H - 1.7) * 0.875;
   const k = H / base.H;
   const girth = 0.8 + (base.girth / 0.9 - 0.93) * 0.4;
@@ -65,7 +65,7 @@ function coxAnthro(seed: number): Anthro {
     ankleH: base.ankleH * k,
     trunk: base.trunk * k,
     hipAboveSeat: base.hipAboveSeat * k,
-    hipHalf: base.hipHalf * k * 0.92,
+    hipHalf: base.hipHalf * k * 0.72,
     shoulderHalf: 0.097 * H * (0.96 + 0.08 * (girth - 0.8)),
     neck: base.neck * k,
     head: Math.sqrt(H / 1.88) * 0.95,
@@ -135,7 +135,7 @@ export class Coxswain {
   /** Cox-seat camera point (boat-local); updated every frame from the head. */
   readonly eye: THREE.Vector3;
   /** Cox-seat camera pitch (rad): low enough for hands and knees, high enough for the stroke seat. */
-  readonly pitch = -0.55;
+  readonly pitch = -0.3;
   private readonly withFigure: boolean;
   private readonly spec: HullSpec;
   private readonly coxX: number;
@@ -310,7 +310,6 @@ export class Coxswain {
     return this.coxX + HIP_DX + GRIP_DX + 0.3;
   }
 
-  /** Built on the first update, after the boat's rowers, so makeAnthro's crew alternation is untouched. */
   private buildFigure() {
     const a = (this.anthro = coxAnthro(this.seed));
     this.layout(0, 0);
@@ -337,7 +336,7 @@ export class Coxswain {
     this.group.add(mesh);
     coxEyeLocal(a, this.eyeLocal);
     this.eyeLocal.x -= 0.1;
-    this.eyeLocal.y += 0.02;
+    this.eyeLocal.y += 0.32;
     this.applyFirstPerson();
   }
 
@@ -383,7 +382,7 @@ export class Coxswain {
     this.rudderPivot.rotation.y = rudder;
     if (!this.withFigure) return;
     // human-speed hands: right hand forward = starboard, left hand forward = port
-    const displacement = 0.15 * Math.sin(0.262 * hands);
+    const displacement = 0.27 * Math.sin(0.262 * hands);
     const gx = this.coxX + HIP_DX + GRIP_DX;
     for (let i = 0; i < 2; i++) {
       const s = i === 0 ? -1 : 1;

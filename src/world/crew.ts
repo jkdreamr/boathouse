@@ -67,7 +67,7 @@ function practiceKit(seed: number): Outfit {
   };
 }
 
-const _in: StandInput = { pos: new THREE.Vector3(), yaw: 0, crouch: 0, handL: null, handR: null, hull: null, look: null, dt: 0 };
+const _in: StandInput = { pos: new THREE.Vector3(), yaw: 0, crouch: 0, handL: null, handR: null, hull: null, headTilt: 0, look: null, dt: 0 };
 const _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
 let _lastT = -1;
@@ -87,9 +87,8 @@ export class CrewFigure {
   private readonly pos = new THREE.Vector3();
 
   constructor(seed: number) {
-    // seed never equals 1, so makeAnthro does not advance the rowers' crew counter
     const kit = practiceKit(seed);
-    const base = makeAnthro(1000 + seed * 13, 'men');
+    const base = makeAnthro(1000 + seed * 13, 'men', { counterFree: true });
     this.anthro = { ...base, shoe: kit.shoe ?? base.shoe };
     this.scale = this.anthro.H / 1.85;
     this.solver = new StandingSolver(this.anthro);
@@ -136,6 +135,7 @@ export class CrewFigure {
     _in.handL = p.handL;
     _in.handR = p.handR;
     _in.hull = p.hull ?? null;
+    _in.headTilt = p.headTilt;
     _in.dt = dt;
     this.solver.solve(_in);
     const rig = this.solver.rig;

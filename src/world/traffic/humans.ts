@@ -384,8 +384,7 @@ export function lookOf(s: BoaterSpec): Look {
 }
 
 function anthroOf(s: BoaterSpec): Anthro {
-  // makeAnthro only supplies the template; every field that depends on its crew counter is overridden.
-  const base = makeAnthro(s.seed, s.female ? 'women' : 'men');
+  const base = makeAnthro(s.seed, s.female ? 'women' : 'men', { counterFree: true });
   const H = s.H;
   const sun = s.hat === 'bucket' || s.hat === 'brim';
   return {
@@ -533,177 +532,16 @@ function mergeExtra(geo: THREE.BufferGeometry, ex: Extra) {
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  const surf = geo.getAttribute('figSurf') as THREE.BufferAttribute | undefined;
+  if (surf) {
+    const figSurf = new Float32Array(n * 2);
+    figSurf.set(surf.array as Float32Array);
+    g.setAttribute('figSurf', new THREE.BufferAttribute(figSurf, 2));
+  }
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeVertexNormals();
   geo.dispose();
   return g;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Clothing fallback: until body.ts paints the Outfit itself, recolour the unisuit and add a PFD.
-// Each step is skipped as soon as the shared geometry already shows that outfit colour.
-// ---------------------------------------------------------------------------------------------
-
-const _cc = new THREE.Color();
-function hasColour(C: THREE.BufferAttribute, hex: string) {
-  _cc.set(hex);
-  for (let i = 0; i < C.count; i++) {
-    if (Math.abs(C.getX(i) - _cc.r) < 0.003 && Math.abs(C.getY(i) - _cc.g) < 0.003 && Math.abs(C.getZ(i) - _cc.b) < 0.003) return true;
-  }
-  return false;
-}
-
-function dominant(SI: THREE.BufferAttribute, SW: THREE.BufferAttribute, i: number) {
-  let bone = SI.getX(i);
-  let w = SW.getX(i);
-  for (let k = 1; k < 4; k++) {
-    if (SW.getComponent(i, k) > w) {
-      w = SW.getComponent(i, k);
-      bone = SI.getComponent(i, k);
-    }
-  }
-  return bone;
-}
-
-/** body.ts still dresses everyone in the unisuit if cardinal shorts remain on the thighs. */
-function painted(geo: THREE.BufferGeometry) {
-  const C = geo.getAttribute('color') as THREE.BufferAttribute;
-  const SI = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
-  const SW = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
-  _cc.set(CARDINAL);
-  for (let i = 0; i < C.count; i++) {
-    if (Math.abs(C.getX(i) - _cc.r) > 0.003 || Math.abs(C.getY(i) - _cc.g) > 0.003 || Math.abs(C.getZ(i) - _cc.b) > 0.003) continue;
-    const bone = dominant(SI, SW, i);
-    if (bone === B.thighL || bone === B.thighR) return false;
-  }
-  return true;
-}
-
-function recolour(geo: THREE.BufferGeometry, a: Anthro, rest: Rig, o: Outfit) {
-  const C = geo.getAttribute('color') as THREE.BufferAttribute;
-  const P = geo.getAttribute('position') as THREE.BufferAttribute;
-  const SI = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
-  const SW = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
-  const card = new THREE.Color(CARDINAL);
-  const white = new THREE.Color(WHITE);
-  const top = new THREE.Color(o.top);
-  const bottom = new THREE.Color(o.bottom);
-  const trim = bottom.clone().multiplyScalar(0.7);
-  const inv = new THREE.Matrix4().compose(rest.p[B.pelvis], rest.q[B.pelvis], _hs).invert();
-  const p = new THREE.Vector3();
-  for (let i = 0; i < C.count; i++) {
-    const r = C.getX(i);
-    const g = C.getY(i);
-    const bl = C.getZ(i);
-    const isCard = Math.abs(r - card.r) < 0.003 && Math.abs(g - card.g) < 0.003 && Math.abs(bl - card.b) < 0.003;
-    const isWhite = Math.abs(r - white.r) < 0.003 && Math.abs(g - white.g) < 0.003 && Math.abs(bl - white.b) < 0.003;
-    if (!isCard && !isWhite) continue;
-    const bone = dominant(SI, SW, i);
-    const leg = bone === B.thighL || bone === B.thighR;
-    if (isWhite) {
-      if (leg) C.setXYZ(i, trim.r, trim.g, trim.b);
-      continue;
-    }
-    p.fromBufferAttribute(P, i).applyMatrix4(inv);
-    const c = leg || p.y < 0.03 * a.trunk ? bottom : top;
-    C.setXYZ(i, c.r, c.g, c.b);
-  }
-  C.needsUpdate = true;
-}
-
-/** Torso half-depth / half-width / x-offset by height (fraction of trunk), as body.ts's torso rings. */
-const TORSO: [number, number, number, number][] = [
-  [0.2, 0.1, 0.148, 0],
-  [0.35, 0.095, 0.138, 0.002],
-  [0.5, 0.104, 0.152, 0.006],
-  [0.65, 0.114, 0.168, 0.012],
-  [0.78, 0.112, 0.183, 0.008],
-  [0.9, 0.088, 0.19, 0],
-  [0.98, 0.07, 0.168, -0.006],
-];
-
-function torsoAt(t: number, f: number, out: number[]) {
-  let k = 0;
-  while (k < TORSO.length - 2 && TORSO[k + 1][0] < t) k++;
-  const A = TORSO[k];
-  const Bk = TORSO[k + 1];
-  const u = THREE.MathUtils.clamp((t - A[0]) / (Bk[0] - A[0]), 0, 1);
-  out[0] = THREE.MathUtils.lerp(A[1], Bk[1], u) + (t > 0.55 && t < 0.85 ? 0.012 * f : 0);
-  out[1] = THREE.MathUtils.lerp(A[2], Bk[2], u) - (t > 0.5 ? 0.012 * f : 0);
-  out[2] = THREE.MathUtils.lerp(A[3], Bk[3], u);
-  return out;
-}
-
-/** Type III foam vest: closed-cell panels over the torso with a front zip and two buckled belts. */
-function pfdGeometry(a: Anthro, rest: Rig, colour: string): Extra {
-  const wS = (a.girth * a.H) / 1.88;
-  const T = a.trunk;
-  const f = a.female ? 1 : 0;
-  const M = new THREE.Matrix4().compose(rest.p[B.pelvis], rest.q[B.pelvis], _hs);
-  const base = new THREE.Color(colour);
-  const strap = new THREE.Color('#1b1c1e');
-  const edge = base.clone().multiplyScalar(0.7);
-  // [t, padding, shoulder narrowing]
-  const rows: [number, number, number][] = [
-    [0.3, 0.004, 1],
-    [0.31, 0.024, 1],
-    [0.45, 0.026, 1],
-    [0.6, 0.026, 1],
-    [0.75, 0.024, 1],
-    [0.86, 0.02, 0.98],
-    [0.93, 0.016, 0.8],
-    [0.965, 0.006, 0.66],
-  ];
-  const cols = 28;
-  const pos: number[] = [];
-  const col: number[] = [];
-  const si: number[] = [];
-  const sw: number[] = [];
-  const tmp = [0, 0, 0];
-  const v = new THREE.Vector3();
-  for (const [t, pad, narrow] of rows) {
-    torsoAt(t, f, tmp);
-    const rx = tmp[0] * wS + pad;
-    const rz = tmp[1] * wS * narrow + pad;
-    const ox = tmp[2] * wS;
-    for (let j = 0; j < cols; j++) {
-      const th = (j / cols) * Math.PI * 2;
-      const c = Math.cos(th);
-      const sn = Math.sin(th);
-      // flatter front and back panels, like a foam vest
-      const e = 0.7;
-      const cx = Math.sign(c) * Math.pow(Math.abs(c), e);
-      const sz = Math.sign(sn) * Math.pow(Math.abs(sn), e);
-      v.set(ox + rx * cx, t * T, rz * sz).applyMatrix4(M);
-      pos.push(v.x, v.y, v.z);
-      const front = c > 0;
-      const zip = front && Math.abs(rz * sz) < 0.008;
-      const belt = Math.abs(t - 0.45) < 0.02 || Math.abs(t - 0.6) < 0.02;
-      const cc = pad < 0.01 ? edge : zip || belt ? strap : base;
-      col.push(cc.r, cc.g, cc.b);
-      if (t < 0.55) {
-        const k = THREE.MathUtils.clamp((t - 0.25) / 0.3, 0, 1);
-        si.push(B.spine, B.chest, 0, 0);
-        sw.push(1 - k, k, 0, 0);
-      } else if (t < 0.85) {
-        si.push(B.chest, 0, 0, 0);
-        sw.push(1, 0, 0, 0);
-      } else {
-        const k = ss(0.85, 1.0, t) * ss(0.45, 0.9, Math.abs(sn));
-        si.push(B.chest, sn < 0 ? B.clavL : B.clavR, 0, 0);
-        sw.push(1 - 0.5 * k, 0.5 * k, 0, 0);
-      }
-    }
-  }
-  const idx: number[] = [];
-  for (let r = 0; r < rows.length - 1; r++) {
-    for (let j = 0; j < cols; j++) {
-      const a0 = r * cols + j;
-      const a1 = r * cols + ((j + 1) % cols);
-      idx.push(a0, a0 + cols, a1, a1, a0 + cols, a1 + cols);
-    }
-  }
-  return { pos, col, idx, si, sw };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -745,9 +583,6 @@ export class Boater {
     solveHuman(a, rest, r);
     const o = this.spec.outfit;
     let geo = buildFigureGeometry(a, r, o);
-    const C = geo.getAttribute('color') as THREE.BufferAttribute;
-    if (!painted(geo)) recolour(geo, a, r, o);
-    if (o.pfd && !hasColour(C, o.pfd)) geo = mergeExtra(geo, pfdGeometry(a, r, o.pfd));
     const hat = this.spec.hat;
     if (hat === 'bucket' || hat === 'brim') {
       _hm.compose(r.p[B.head], r.q[B.head], _hs);

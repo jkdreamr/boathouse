@@ -80,10 +80,11 @@ function rng(seed: number) {
 // boats in the scene never share a lineup.
 let crewIndex = -1;
 
-export function makeAnthro(seed: number, crew?: 'men' | 'women'): Anthro {
-  if (seed === 1 || crewIndex < 0) crewIndex++;
-  const female = crew ? crew === 'women' : crewIndex % 2 === 1;
-  const r = rng(seed * 7919 + crewIndex * 104729 + 17);
+export function makeAnthro(seed: number, crew?: 'men' | 'women', options: { counterFree?: boolean } = {}): Anthro {
+  if (!options.counterFree && (seed === 1 || crewIndex < 0)) crewIndex++;
+  const generation = options.counterFree ? 0 : crewIndex;
+  const female = crew ? crew === 'women' : generation % 2 === 1;
+  const r = rng(seed * 7919 + generation * 104729 + 17);
   const H = female ? 1.7 + 0.16 * r() : 1.83 + 0.17 * r();
   const girth = (female ? 0.9 : 1) * (0.93 + 0.14 * r());
   const skin = SKIN_TONES[Math.floor(r() * SKIN_TONES.length) % SKIN_TONES.length];
@@ -95,7 +96,7 @@ export function makeAnthro(seed: number, crew?: 'men' | 'women'): Anthro {
   const headwearColor = r() < 0.6 ? WHITE : r() < 0.5 ? CARDINAL : DARK;
   const glasses = r() < 0.3;
   // Face details come from their own stream so the body/kit draws above stay unchanged.
-  const q = rng(seed * 31337 + crewIndex * 7177 + 5);
+  const q = rng(seed * 31337 + generation * 7177 + 5);
   const v = (spread: number) => 1 + spread * (q() + q() - 1);
   const face: Face = {
     nose: v(0.14) * (female ? 0.86 : 1),
@@ -136,7 +137,7 @@ export function makeAnthro(seed: number, crew?: 'men' | 'women'): Anthro {
     headwear,
     headwearColor,
     glasses,
-    shoe: crewIndex % 2 === 0 ? '#e8e8e4' : '#202022',
+    shoe: generation % 2 === 0 ? '#e8e8e4' : '#202022',
     face,
     eyes,
     recession,

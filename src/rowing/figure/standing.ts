@@ -30,6 +30,8 @@ export interface StandInput {
   handR: THREE.Vector3 | null;
   /** carried hull: local +x along the keel, local y = up when right side up; centreline through the origin */
   hull: THREE.Object3D | null;
+  /** tilt the head out from under a shoulder-carried hull */
+  headTilt?: number;
   /** optional world point to look at */
   look: THREE.Vector3 | null;
   dt: number;
@@ -554,7 +556,7 @@ export class StandingSolver {
     if (_v.z < 0) lookYaw = Math.sign(_v.x) * 0.75 * glance;
     const horiz = Math.hypot(_v.x, _v.z);
     lookPitch = lerp(lookPitch, clamp(Math.atan2(-_v.y, horiz), -0.3, 0.6), glance);
-    const headRoll = hullSide * 0.3 * wShoulder;
+    const headRoll = (inp.headTilt ?? hullSide * 0.3) * wShoulder;
     at(p[B.chest], q[B.chest], -0.02 * T, 0.5 * T, 0, p[B.neck]);
     segQ(lookYaw, headRoll, lookPitch - 0.06 * wOver, q[B.head]);
     _qb.copy(q[B.chest]).slerp(q[B.head], 0.5);
@@ -665,6 +667,6 @@ function nearRail(t: THREE.Vector3) {
 /** Neutral standing rest pose (feet under the hips, arms hanging) for binding. */
 export function standingRest(a: Anthro): Rig {
   const s = new StandingSolver(a);
-  s.solve({ pos: new THREE.Vector3(), yaw: 0, crouch: 0, handL: null, handR: null, hull: null, look: null, dt: 0 });
+  s.solve({ pos: new THREE.Vector3(), yaw: 0, crouch: 0, handL: null, handR: null, hull: null, headTilt: 0, look: null, dt: 0 });
   return s.rig;
 }
