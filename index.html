@@ -5,7 +5,7 @@
     <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stanford Rowing Center · Redwood Creek</title>
-    <meta name="description" content="Walk the Stanford boathouse on Redwood Creek and cox an eight." />
+    <meta name="description" content="Explore the Stanford boathouse and take a coaching launch along Redwood Creek." />
   </head>
   <body>
     <div id="app"></div>
@@ -29,41 +29,21 @@
         <button id="todBtn" type="button" title="Time of day (T)">Golden hour</button>
         <button id="soundBtn" type="button" title="Sound (M)">Sound on</button>
         <button id="dockBtn" type="button" title="Jump to the launch dock">Go to the dock</button>
+        <button id="boardBtn" class="hidden" type="button">Board launch</button>
       </nav>
     </header>
 
     <div id="help" class="hidden"></div>
 
-    <!-- [realism:stroke] -->
-    <section id="rowPanel" class="hidden" aria-label="Rowing controls">
+    <section id="launchPanel" class="hidden" aria-label="Launch controls">
       <div class="stats">
-        <div><b id="spm">—</b><span>Stroke Rate</span></div>
-        <div><b id="split">—</b><span>Split /500m</span></div>
         <div><b id="speed">0.0</b><span>Speed (m/s)</span></div>
         <div><b id="dist">0</b><span>Meters</span></div>
-        <div class="rudderStat">
-          <div class="rudderEnds"><span>Port</span><span>Starboard</span></div>
-          <div class="rudderTrack" role="img" aria-label="Rudder position">
-            <i id="rudderMarker"></i>
-          </div>
-          <span>Rudder</span>
-        </div>
       </div>
       <div class="controls">
-        <div class="pressure" role="group" aria-label="Stroke pressure">
-          <button id="pressureLight" type="button" data-pressure="0" aria-pressed="false">Light</button>
-          <button id="pressureHalf" type="button" data-pressure="1" aria-pressed="true">Half</button>
-          <button id="pressureFull" type="button" data-pressure="2" aria-pressed="false">Full</button>
-        </div>
-        <button id="strokeBtn" type="button">Stroke</button>
-        <div class="side">
-          <button id="backBtn" class="hidden" type="button">Back it down (R)</button>
-          <button id="camBtn" type="button">Chase cam</button>
-          <button id="walkBtn" type="button">Return to walk</button>
-        </div>
+        <button id="walkBtn" type="button">Return to dock</button>
       </div>
     </section>
-    <!-- [/realism:stroke] -->
 
     <div id="pause" class="hidden"><p>Click to look around</p></div>
 
@@ -73,14 +53,14 @@
         <h1>Stanford Rowing Center</h1>
         <p class="lede">
           A walkable recreation of the Arrillaga Family Rowing &amp; Sailing Center. Wander the boat bays, take the
-          gangway down to the dock, and cox the varsity eight down the creek.
+          gangway down to the dock, and take a coaching launch along Redwood Creek.
         </p>
         <button id="play" type="button">Enter the boathouse</button>
         <dl class="keys">
           <div><dt>WASD</dt><dd>Walk</dd></div>
           <div><dt>Mouse</dt><dd>Look</dd></div>
-          <div><dt>E</dt><dd>Board the eight</dd></div>
-          <div><dt>Space</dt><dd>Stroke</dd></div>
+          <div><dt>E</dt><dd>Board the launch at the dock</dd></div>
+          <div><dt>W / S</dt><dd>Drive forward / reverse</dd></div>
           <div><dt>A / D</dt><dd>Steer</dd></div>
           <div><dt>T</dt><dd>Time of day</dd></div>
         </dl>
@@ -89,9 +69,6 @@
     </section>
 
     <div id="toast" class="hidden"></div>
-    <!-- [realism:handling] -->
-    <div id="callout" class="hidden"></div>
-    <button id="callBtn" class="hidden" type="button"></button>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

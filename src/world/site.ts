@@ -13,6 +13,10 @@ import { mergeStaticMeshes } from './mergeStatic';
 
 export const DOCK_Y = 0.5;
 export const DOCK = { minX: -45, maxX: 45, minZ: -14.2, maxZ: -11 };
+export const DOCK_PILES: readonly (readonly [number, number])[] = [
+  [-30, -14.9], [-10, -14.9], [10, -14.9], [30, -14.9],
+  [-30, -10.3], [30, -10.3], [-43, -27], [43, -27],
+];
 // [realism:water]
 export const dockDeckY = () => DOCK_Y + conditions.level;
 /** Where the varsity eight sits alongside the dock (hull centerline). */
@@ -575,16 +579,7 @@ export function buildSite(scene: THREE.Scene) {
     addDynamicFlatFloor(fx - 1.5, fx + 1.5, -26.2, DOCK.minZ, () => DOCK_Y + conditions.level);
   }
   // [realism:water]
-  const pileSpots: [number, number][] = [
-    [-30, -14.9],
-    [-10, -14.9],
-    [10, -14.9],
-    [30, -14.9],
-    [-30, -10.3],
-    [30, -10.3],
-    [-43, -27],
-    [43, -27],
-  ];
+  const pileSpots = DOCK_PILES;
   const pileMat = new THREE.MeshStandardMaterial({ map: pileTexture(), roughness: 0.86 });
   const capMat = M.white;
   const pilings = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, 9, 16, 1), pileMat, pileSpots.length);

@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import type { CrewBoat } from '../rowing/crewboat';
 import { addSystem } from '../sim/systems';
 import { CrewAI } from './traffic/crews';
 import { Launch, Motorboat } from './traffic/motor';
@@ -20,15 +19,15 @@ class PlayerBody implements Body {
   z = 0;
   heading = 0;
   speed = 0;
-  readonly halfLen = 8.8;
-  readonly halfBeam = 3.1;
+  halfLen = 2.75;
+  halfBeam = 1;
 }
 
 /**
  * Other people on Redwood Creek: AI crews (8+, 4+, 2-) with a coaching launch, FJ/420 dinghies,
  * an OC6 outrigger, kayaks, a SUP and an occasional motorboat. One system drives them all.
  */
-export function initTraffic(scene: THREE.Scene, getPlayerBoat: () => CrewBoat | null | undefined, camera?: THREE.Camera) {
+export function initTraffic(scene: THREE.Scene, getPlayerBoat: () => Body | null | undefined, camera?: THREE.Camera) {
   const root = new THREE.Group();
   root.name = 'traffic';
   scene.add(root);
@@ -64,6 +63,8 @@ export function initTraffic(scene: THREE.Scene, getPlayerBoat: () => CrewBoat | 
         player.z = pb.z;
         player.heading = pb.heading;
         player.speed = pb.speed;
+        player.halfLen = pb.halfLen;
+        player.halfBeam = pb.halfBeam;
       }
       if (camera) camera.getWorldPosition(ctx.cam);
       else ctx.cam.set(player.x, 2, player.z);
