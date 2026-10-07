@@ -4,7 +4,8 @@ import { centerline, channelWidth } from '../terrain';
 import { Craft } from './craft';
 import { type Ctx, clamp, headingTo, lerp, navDist, rng, smooth, wrap } from './nav';
 import { addMesh, type Loft, loftDeck, loftGeometry, loftGunwale, loftHalfBeam, loftRail, std } from './hulls';
-import { type Look, makeLook, type PeopleBatch, type SeatedPose } from './people';
+import { makeLook, type PeopleBatch } from './people';
+import { Boater, flatFoot, makeBoater, makePose } from './humans';
 
 /** Fallback sea breeze (from ~WNW/NW, typical bay afternoon) used only if the conditions model reports no wind. */
 const FALLBACK_WIND = new THREE.Vector2(0.9, 4.2);
@@ -82,16 +83,19 @@ function line(parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, r: num
   return m;
 }
 
-const _hip = new THREE.Vector3();
-const _hL = new THREE.Vector3();
-const _hR = new THREE.Vector3();
-const _fL = new THREE.Vector3();
-const _fR = new THREE.Vector3();
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
+const _c = new THREE.Vector3();
+const _j = new THREE.Vector3();
+const _blk = new THREE.Vector3();
+const _rat = new THREE.Vector3();
+const _lead = new THREE.Vector3();
+const _clew = new THREE.Vector3();
 const _wire = new THREE.Color('#9aa0a6');
 const _tillerC = new THREE.Color('#6b4f2a');
-const pose: SeatedPose = { hip: _hip, lean: 0, roll: 0, twist: 0, handL: _hL, handR: _hR, footL: _fL, footR: _fR };
+const _extC = new THREE.Color('#2b2c2e');
+const _ropeC = new THREE.Color('#e3ddcc');
+const hp = makePose();
 
 /** Stanford-style college dinghy (FJ / 420) sailed by a skipper and crew. */
 export class Dinghy extends Craft {
@@ -110,7 +114,7 @@ export class Dinghy extends Craft {
   private tx = 0;
   private tz = 0;
   private rand: () => number;
-  private looks: Look[];
+  private sailors: Boater[];
   private boomAng = 0;
   private jibAng = 0;
   private puff: number;
@@ -167,7 +171,11 @@ export class Dinghy extends Craft {
     this.detail.push(cb, window_);
     const tops = ['#2e2d29', '#8c1515', '#f4f2ec', '#3d5a80', '#5a5f66'];
     const pfd = ['#2e2d29', '#8c1515', '#c4302b', '#1f4e79', '#e0a63a'];
-    this.looks = [makeLook(this.rand, tops, { pfd, hat: 0.6 }), makeLook(this.rand, tops, { pfd, hat: 0.4 })];
+    // These two draws used to pick the proxy colours; keep them so the AI's random sequence is unchanged.
+    makeLook(this.rand, tops, { pfd, hat: 0.6 });
+    makeLook(this.rand, tops, { pfd, hat: 0.4 });
+    const dress = rng(seed * 31 + 7);
+    this.sailors = [0, 1].map(() => new Boater(makeBoater(dress, 'sailor', false, { tops, pfd })));
     this.pickTarget();
     this.speed = 1.5;
   }
@@ -276,57 +284,100 @@ export class Dinghy extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
+    pb.craft(this.group, this.camDist);
     const L = this.cls.loft;
     const s = this.side >= 0 ? 1 : -1;
     const blend = Math.abs(this.side);
     const gy = loftGunwale(L, 0.5);
-    // Skipper aft on the windward side deck, tiller extension in the aft hand, mainsheet in the other.
+    const floor = gy - 0.27;
+    // Centre mainsheet: boom block → ratchet block on the floor → skipper's sheet hand.
+    const bd = this.cls.boom * 0.55;
+    _blk.set(this.cls.mastX - bd * Math.cos(this.boomAng), loftGunwale(L, 0.6) + 0.78, bd * Math.sin(this.boomAng));
+    _rat.set(-0.25, floor + 0.06, 0);
+    pb.limb(_blk, _rat, 0.005, _ropeC);
+    // Jib clew (foot of the sail in the jib's own frame), led through the leeward fairlead to the crew.
+    const ja = this.jib.rotation.z;
+    _clew.set(-1.5 * Math.cos(ja), -1.5 * Math.sin(ja), 0);
+    _clew.set(_clew.x * Math.cos(this.jibAng), _clew.y, -_clew.x * Math.sin(this.jibAng)).add(this.jibG.position);
+    _lead.set(0.15, gy + 0.03, -s * (loftHalfBeam(L, 0.54) - 0.12));
+    pb.limb(_clew, _lead, 0.004, _ropeC);
+    _j.set(-L.length / 2 + 0.95, gy + 0.08, -this.rudder.rotation.y * 0.6);
     for (let i = 0; i < 2; i++) {
       const skipper = i === 0;
+      const b = this.sailors[i];
       const hx = skipper ? -0.95 : 0.05;
-      const hb = loftHalfBeam(L, (hx / L.length) + 0.5);
+      const hb = loftHalfBeam(L, hx / L.length + 0.5);
       const trap = skipper ? 0 : this.trap;
       const out = this.hike * (skipper ? 1 : 1 - trap);
+      // the aft hand is the left one when sitting on the starboard side facing inboard
+      const aft = s > 0 ? hp.handL : hp.handR;
+      const fwd = s > 0 ? hp.handR : hp.handL;
+      const aftT = s > 0 ? hp.thumbL : hp.thumbR;
+      const fwdT = s > 0 ? hp.thumbR : hp.thumbL;
       if (trap > 0.5) {
-        _fL.set(hx + 0.15, gy, s * hb);
-        _fR.set(hx - 0.2, gy, s * hb);
-        _hip.set(hx, gy + 0.32, s * (hb + 0.82));
-        pose.lean = 0;
-        pose.roll = s * 1.25;
-        pose.twist = 0;
-        _hL.set(this.cls.mastX - 0.6, gy + 1.25, s * (hb + 0.2));
-        _hR.set(hx + 0.3, gy + 0.65, s * (hb + 0.95));
+        // On the wire: feet on the gunwale, body straight and nearly horizontal, front hand on the handle.
+        hp.yaw = 0;
+        hp.twist = 0;
+        hp.hip.set(hx, gy + 0.32, s * (hb + 0.82));
+        hp.up.set(0, Math.cos(1.25), s * Math.sin(1.25));
         _a.set(this.cls.mastX, gy + this.cls.mastH * 0.74, 0);
-        pb.limb(_a, _hip, 0.004, _wire);
-      } else {
-        _hip.set(hx, gy + 0.06, s * blend * (hb - 0.12 + 0.1 * out));
-        pose.lean = 0.12 - 0.35 * out;
-        pose.roll = s * blend * (0.12 + 0.95 * out);
-        pose.twist = s * (skipper ? 0.25 : 0.1);
-        _fL.set(hx + 0.55, gy - 0.26, -s * 0.12 + s * 0.15);
-        _fR.set(hx + 0.6, gy - 0.26, s * 0.12 + s * 0.05);
-        if (skipper) {
-          _hL.set(hx - 0.25, gy + 0.32, _hip.z - s * 0.35);
-          _hR.set(hx + 0.35, gy + 0.3, _hip.z - s * 0.3);
-        } else {
-          _hL.set(hx + 0.35, gy + 0.36, _hip.z - s * 0.3);
-          _hR.set(hx + 0.2, gy + 0.05, s * hb);
+        pb.limb(_a, hp.hip, 0.004, _wire);
+        _b.subVectors(_a, hp.hip).normalize();
+        fwd.copy(hp.hip).addScaledVector(_b, 0.62);
+        fwdT.copy(_b);
+        aft.copy(hp.hip).addScaledVector(hp.up, 0.32).add(_c.set(0.3, 0.12, 0));
+        aftT.subVectors(_lead, aft).normalize();
+        for (let k = 0; k < 2; k++) {
+          const f = k === 0 ? hp.footL : hp.footR;
+          f.heel.set(hx + (k === 0 ? 0.15 : -0.2), gy - 0.02, s * (hb - 0.02));
+          f.toe.set(1, 0, 0);
+          f.sole.set(0, 0.42, s * 0.91).normalize();
         }
+        hp.knee.set(0, 1, 0);
+        hp.kneeOut = 0.02;
+        pb.limb(_lead, aft, 0.004, _ropeC);
+      } else {
+        // On the windward side deck facing inboard and forward, feet under the hiking strap; hiking
+        // tips the trunk out over the water. Shoulders turn further forward than the hips.
+        hp.yaw = s * 0.75;
+        hp.twist = s * 0.4;
+        hp.hip.set(hx, gy + b.hipAboveSeat - 0.01, s * blend * (hb - 0.1 + 0.22 * out));
+        const tilt = blend * (0.12 + 0.95 * out);
+        hp.up.set(-0.1, Math.cos(tilt), s * Math.sin(tilt)).normalize();
+        _c.copy(hp.hip).addScaledVector(hp.up, 0.4);
+        const zin = -s * 0.3;
+        if (skipper) {
+          // Dagger grip on the tiller extension across the body; mainsheet in the forward hand.
+          aft.set(_c.x - 0.08, _c.y - 0.1, _c.z + zin);
+          fwd.set(_c.x + 0.2, _c.y - 0.14, _c.z + zin * 1.05);
+          aftT.subVectors(aft, _j).normalize();
+          fwdT.subVectors(_rat, fwd).normalize();
+        } else {
+          aft.set(_c.x - 0.02, _c.y - 0.14, _c.z + zin);
+          aftT.subVectors(_lead, aft).normalize();
+          fwd.set(hx + 0.32, gy + 0.03, s * blend * (hb - 0.04));
+          fwdT.set(1, 0, 0);
+          pb.limb(_lead, aft, 0.004, _ropeC);
+        }
+        const fz = s * blend * (hb - 0.62);
+        flatFoot(hp.footL, hx + (s > 0 ? 0.62 : 0.42), floor, fz - 0.07, s * 0.8);
+        flatFoot(hp.footR, hx + (s > 0 ? 0.42 : 0.62), floor, fz + 0.07, s * 0.8);
+        hp.knee.set(0.3, 1, 0);
+        hp.kneeOut = 0.03;
       }
-      if (s < 0) {
-        _b.copy(_hL);
-        _hL.copy(_hR);
-        _hR.copy(_b);
-      }
-      pb.person(pose, this.looks[i]);
+      hp.elbow.set(-0.2, -0.8, 0.55);
+      hp.gaze.set(this.cls.mastX + 4, gy + 1.4, -s * 0.6);
+      hp.legs = true;
+      pb.human(b, hp);
       if (skipper) {
-        // Tiller and extension to the skipper's aft hand; mainsheet from boom end to the hand.
+        // Tiller, then the extension from its universal joint through the skipper's hand.
         _a.set(-L.length / 2 + 0.02, gy + 0.08, 0);
-        _b.set(-L.length / 2 + 0.95, gy + 0.08, -this.rudder.rotation.y * 0.6);
-        pb.limb(_a, _b, 0.02, _tillerC);
-        pb.limb(_b, s > 0 ? _hL : _hR, 0.01, _wire);
+        pb.limb(_a, _j, 0.02, _tillerC);
+        _b.subVectors(aft, _j);
+        const len = _b.length();
+        _b.multiplyScalar((len + 0.07) / Math.max(len, 1e-3)).add(_j);
+        pb.limb(_j, _b, 0.011, _extC);
+        pb.limb(_rat, fwd, 0.005, _ropeC);
       }
     }
   }

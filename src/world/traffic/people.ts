@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, SKIN_TONES } from './nav';
+import { type Boater, HUMAN_LOD, HumanPool, type HumanPose } from './humans';
 
 const LIMBS = 900;
 const BALLS = 160;
@@ -79,6 +80,10 @@ export class PeopleBatch {
   private nb = 0;
   private nx = 0;
   private M = new THREE.Matrix4();
+  /** Pooled skinned figures for people near the camera. */
+  readonly humans = new HumanPool();
+  private parent: THREE.Object3D | null = null;
+  private near = false;
 
   constructor(parent: THREE.Object3D) {
     const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.75 });
@@ -101,9 +106,11 @@ export class PeopleBatch {
 
   begin() {
     this.nl = this.nb = this.nx = 0;
+    this.humans.begin();
   }
 
   end() {
+    this.humans.end();
     for (const [m, n] of [
       [this.limbs, this.nl],
       [this.balls, this.nb],
@@ -118,6 +125,58 @@ export class PeopleBatch {
   /** Set the craft-local → world transform used by the following calls. */
   frame(m: THREE.Matrix4) {
     this.M.copy(m);
+    this.parent = null;
+    this.near = false;
+  }
+
+  /** Start drawing a craft: its people become skinned figures under `group` when it's near the camera. */
+  craft(group: THREE.Object3D, camDist: number) {
+    group.updateMatrixWorld();
+    this.M.copy(group.matrixWorld);
+    this.parent = group;
+    this.near = camDist < HUMAN_LOD;
+  }
+
+  /** A person: a skinned figure near the camera, an instanced proxy beyond. Returns true if skinned. */
+  human(b: Boater, p: HumanPose) {
+    if (this.near && this.parent && this.humans.show(b, this.parent, p)) return true;
+    this.proxy(p, b.look);
+    return false;
+  }
+
+  /** Far-LOD stand-in drawn from the same pose as the skinned figure. */
+  proxy(p: HumanPose, look: Look) {
+    const tl = 0.52;
+    _up.copy(p.up);
+    const ys = p.yaw - p.twist;
+    _ac.set(Math.sin(ys), 0, Math.cos(ys));
+    _hip.copy(p.hip);
+    _chest.copy(_hip).addScaledVector(_up, tl);
+    this.limb(_hip, _chest, 0.145, look.top);
+    if (look.pfd) {
+      _a.copy(_hip).addScaledVector(_up, tl * 0.38);
+      _b.copy(_hip).addScaledVector(_up, tl * 0.97);
+      this.limb(_a, _b, 0.168, look.pfd);
+    }
+    _head.copy(_chest).addScaledVector(_up, 0.2);
+    this.ball(_head, 0.1, 0.112, 0.095, look.skin);
+    _a.copy(_head).addScaledVector(_up, look.hat ? 0.055 : 0.03);
+    if (look.hat) this.ball(_a, 0.108, 0.07, 0.104, look.hat);
+    else this.ball(_a, 0.106, 0.095, 0.1, look.hair);
+    for (let s = -1; s <= 1; s += 2) {
+      _sh.copy(_chest).addScaledVector(_up, -0.05).addScaledVector(_ac, s * 0.19);
+      _d.set(-0.4, -0.6, s * 0.7);
+      this.chain(_sh, s < 0 ? p.handL : p.handR, 0.29, 0.28, _d, 0.048, 0.04, look.top, look.skin);
+    }
+    if (p.legs) {
+      for (let s = -1; s <= 1; s += 2) {
+        _a.copy(_hip).addScaledVector(_ac, s * 0.1);
+        const f = s < 0 ? p.footL : p.footR;
+        _b.copy(f.heel).addScaledVector(f.sole, 0.08).addScaledVector(f.toe, 0.05);
+        _d.copy(p.knee);
+        this.chain(_a, _b, 0.44, 0.44, _d, 0.075, 0.055, look.bottom, look.bottom);
+      }
+    }
   }
 
   limb(a: THREE.Vector3, b: THREE.Vector3, r: number, c: THREE.Color) {
