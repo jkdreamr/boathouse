@@ -44,6 +44,27 @@ function outboard(parent: THREE.Object3D, x: number, y: number, cowl: string) {
   return g;
 }
 
+/** Shared aluminium coaching-launch model for the AI and player craft. */
+export function buildLaunchModel(parent: THREE.Object3D) {
+  const alu = std('#b7bcc1', 0.42, 0.75, THREE.DoubleSide);
+  addMesh(parent, loftGeometry(LAUNCH), alu, true).receiveShadow = true;
+  const floor = addMesh(parent, loftDeck(LAUNCH, 0.02, 0.84, 0.44, 0.08), std('#8c9196', 0.8, 0.4, THREE.DoubleSide));
+  floor.receiveShadow = true;
+  addMesh(parent, loftDeck(LAUNCH, 0.84, 0.995, 0), alu);
+  for (const r of loftRail(LAUNCH, 0.035)) addMesh(parent, r, std('#2e2d29', 0.7));
+  for (const [x, w] of [[-1.6, 0.36], [0.35, 0.3]]) {
+    const seat = addMesh(parent, new THREE.BoxGeometry(w, 0.05, LAUNCH.beam - 0.25), std('#a9aeb3', 0.5, 0.6));
+    seat.position.set(x, 0.42, 0);
+  }
+  const tank = addMesh(parent, new THREE.BoxGeometry(0.5, 0.28, 0.34), std('#b3261e', 0.5));
+  tank.position.set(-2.2, 0.32, -0.55);
+  const ring = addMesh(parent, new THREE.TorusGeometry(0.22, 0.05, 6, 14), std('#e4572e', 0.6));
+  ring.rotation.x = Math.PI / 2;
+  ring.position.set(0.9, 0.48, 0.45);
+  const motor = outboard(parent, -LAUNCH.length / 2 - 0.08, LAUNCH.freeboard + 0.02, DARK);
+  return { motor, detail: [motor, ring, tank] };
+}
+
 /** Coaching launch shadowing a crew a boat-width off its port side (mid-channel side). */
 export class Launch extends Craft {
   private motor: THREE.Group;
@@ -57,27 +78,10 @@ export class Launch extends Craft {
 
   constructor(parent: THREE.Object3D, private readonly crew: CrewAI) {
     super(parent, 'traffic-launch', crew.x - 4, crew.z - 18, crew.heading, 2.75, 1.0);
-    const alu = std('#b7bcc1', 0.42, 0.75, THREE.DoubleSide);
-    addMesh(this.group, loftGeometry(LAUNCH), alu, true).receiveShadow = true;
-    const floor = addMesh(this.group, loftDeck(LAUNCH, 0.02, 0.84, 0.44, 0.08), std('#8c9196', 0.8, 0.4));
-    floor.receiveShadow = true;
-    addMesh(this.group, loftDeck(LAUNCH, 0.84, 0.995, 0), alu);
-    for (const r of loftRail(LAUNCH, 0.035)) addMesh(this.group, r, std('#2e2d29', 0.7));
-    for (const [x, w] of [
-      [-1.6, 0.36],
-      [0.35, 0.3],
-    ]) {
-      const seat = addMesh(this.group, new THREE.BoxGeometry(w, 0.05, LAUNCH.beam - 0.25), std('#a9aeb3', 0.5, 0.6));
-      seat.position.set(x, 0.42, 0);
-    }
-    const tank = addMesh(this.group, new THREE.BoxGeometry(0.5, 0.28, 0.34), std('#b3261e', 0.5));
-    tank.position.set(-2.2, 0.32, -0.55);
-    const ring = addMesh(this.group, new THREE.TorusGeometry(0.22, 0.05, 6, 14), std('#e4572e', 0.6));
-    ring.rotation.x = Math.PI / 2;
-    ring.position.set(0.9, 0.48, 0.45);
-    this.motor = outboard(this.group, -LAUNCH.length / 2 - 0.08, LAUNCH.freeboard + 0.02, DARK);
+    const model = buildLaunchModel(this.group);
+    this.motor = model.motor;
     this.mega = addMesh(this.group, new THREE.CylinderGeometry(0.035, 0.13, 0.34, 12, 1, true), std('#e9e7e1', 0.5, 0, THREE.DoubleSide));
-    this.detail.push(this.motor, this.mega, ring, tank);
+    this.detail.push(...model.detail, this.mega);
     this.look = makeLook(this.rand, ['#2e2d29', '#8c1515', '#1f2a3a'], { hat: 0.85 });
   }
 
@@ -274,4 +278,3 @@ export class Motorboat extends Craft {
     pose.footL = pose.footR = undefined;
   }
 }
-

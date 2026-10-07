@@ -2,7 +2,6 @@ import './style.css';
 import * as THREE from 'three';
 import { Sound } from './audio';
 import { Player } from './player';
-import { CrewBoat } from './rowing/crewboat';
 import { compassPoint, conditions, KT, seekTide, tidePhase, updateConditions } from './sim/conditions';
 import { systems } from './sim/systems';
 import { setMaxAnisotropy } from './textures';
@@ -10,14 +9,11 @@ import { floorAt, floors } from './world/collide';
 import { buildBoathouse, BALCONY_Y } from './world/boathouse';
 import { Environment, PRESETS } from './world/env';
 import { buildBackdrop } from './world/props';
-import { buildSite, dockDeckY, DOCK, gangway, MOORING } from './world/site';
+import { buildSite, dockDeckY, DOCK, gangway } from './world/site';
 import { buildTerrain, centerline, channelDepthDist, PAD_Y, terrainHeight } from './world/terrain';
-// [realism:interior]
 import { interiorLabel } from './world/interior';
-import { Handling } from './world/handling'; // [realism:handling]
-// [realism:traffic]
+import { PlayerLaunch } from './world/launch';
 import { initTraffic } from './world/traffic';
-// [realism:birds]
 import { initBirds } from './world/birds';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -41,40 +37,16 @@ buildSite(scene);
 buildBoathouse(scene);
 buildBackdrop(scene);
 
-const eight = new CrewBoat(scene, '8+');
-eight.reset(MOORING, 0);
-eight.group.traverse((object) => object.layers.set(1));
 const sound = new Sound();
-eight.onCatch = () => sound.catch();
-eight.onFinish = () => sound.finish();
-
 const player = new Player(camera);
-// [realism:traffic]
-initTraffic(scene, () => eight, camera);
-// [realism:water]
-const spawn = () => player.place(9, dockDeckY(), DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
+let playerLaunch: PlayerLaunch | null = null;
+const traffic = initTraffic(scene, () => playerLaunch, camera);
+const launch = playerLaunch = new PlayerLaunch(scene, traffic.wake);
+const spawn = () => player.place(20, dockDeckY(), DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
 spawn();
-// [realism:handling] boat carrying crew: rack -> launch -> board, and dock -> rack
-const handling = new Handling({
-  scene,
-  camera,
-  player,
-  eight,
-  mode: () => mode,
-  boardInPlace: () => board(true),
-  enterWalk: () => {
-    mode = 'walk';
-    keys.clear();
-    syncUI();
-  },
-});
 
-type Mode = 'intro' | 'walk' | 'row';
+type Mode = 'intro' | 'walk' | 'launch';
 let mode: Mode = 'intro';
-let chase = false;
-let coxYaw = 0;
-let coxPitch = 0;
-let dragging = false;
 const keys = new Set<string>();
 const none = new Set<string>();
 const canvas = renderer.domElement;
@@ -102,47 +74,41 @@ function lock() {
   }
 }
 
-function nearBoat() {
-  if (handling.active || handling.stowed) return false; // [realism:handling]
+function nearLaunch() {
   const p = player.pos;
-  return p.y < dockDeckY() + 0.3 && p.y > dockDeckY() - 0.3 && p.z < DOCK.minZ + 1.8 && Math.abs(p.x - eight.x) < 9.5; // [realism:water]
+  return Math.abs(p.y - dockDeckY()) < 0.45 && Math.hypot(p.x - launch.x, p.z - launch.z) < 4.5;
 }
 
-// [realism:stroke]
 function setHelp() {
   $('help').textContent =
-    mode === 'row'
-      ? `Space to stroke (tap the rhythm, hold to keep it) · A/D to steer · 1–3 pressure${eight.aground ? ' · R to back it down' : ''} · C camera · Esc to walk`
-      : 'WASD to walk · Shift to run · Space to jump · E to board the varsity eight · T for time of day · Esc to release the mouse';
+    mode === 'launch'
+      ? 'W / S forward and reverse · A / D steer · Esc to return to the dock'
+      : 'WASD to walk · Shift to run · Space to jump · E to board the launch · T for time of day · Esc to release the mouse';
 }
 
 function syncUI() {
-  document.body.classList.toggle('row', mode === 'row');
+  document.body.classList.toggle('launch', mode === 'launch');
   $('intro').classList.toggle('hidden', mode !== 'intro');
   for (const id of ['topbar', 'help']) $(id).classList.toggle('hidden', mode === 'intro');
-  $('rowPanel').classList.toggle('hidden', mode !== 'row');
+  $('launchPanel').classList.toggle('hidden', mode !== 'launch');
   $('reticle').classList.toggle('hidden', mode !== 'walk');
   $('pause').classList.toggle('hidden', !(mode === 'walk' && !locked()));
-  $('modeChip').textContent = mode === 'row' ? 'Rowing' : 'Walking';
-  $('dockBtn').textContent = mode === 'row' ? 'Back to the dock' : 'Go to the dock';
+  $('modeChip').textContent = mode === 'launch' ? 'On the launch' : 'Walking';
+  $('dockBtn').textContent = mode === 'launch' ? 'Return to the dock' : 'Go to the dock';
+  $('boardBtn').classList.toggle('hidden', mode !== 'walk' || !nearLaunch());
   if (mode !== 'walk') $('prompt').classList.add('hidden');
   setHelp();
 }
 
-// [realism:stroke] [realism:handling]
-function board(inPlace = false) {
+function board() {
+  if (mode !== 'walk' || !nearLaunch()) return;
   clearToast();
-  mode = 'row';
-  chase = false;
-  coxYaw = 0;
-  coxPitch = 0;
-  lastTap = -Infinity;
-  wasAground = false;
+  mode = 'launch';
+  keys.clear();
   if (locked()) document.exitPointerLock();
-  if (!inPlace) eight.reset(MOORING, 0); // [realism:handling]
   sound.start();
   syncUI();
-  toast('You’re in the cox seat. Press Space or Stroke to row.', 4);
+  toast('On the launch. Hold W to go, A / D to steer.', 3);
 }
 
 function toWalk() {
@@ -150,16 +116,16 @@ function toWalk() {
   mode = 'walk';
   keys.clear();
   if (locked()) document.exitPointerLock();
-  eight.reset(MOORING, 0);
-  player.place(eight.x + 3, dockDeckY(), DOCK.minZ + 1.1, 0.2, -0.15); // [realism:water]
+  launch.reset();
+  spawn();
   syncUI();
 }
 
 function goDock() {
-  if (handling.active) return; // [realism:handling]
-  if (mode === 'row') return toWalk();
-  player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.12); // [realism:water]
-  toast('Launch dock. Walk up to the eight and press E.');
+  if (mode === 'launch') return toWalk();
+  spawn();
+  syncUI();
+  toast('Launch dock. Press E near the launch to board.');
 }
 
 function cycleTod() {
@@ -172,23 +138,6 @@ function toggleSound() {
   sound.start();
   sound.setMuted(!sound.muted);
   $('soundBtn').textContent = sound.muted ? 'Sound off' : 'Sound on';
-}
-
-// [realism:stroke]
-let lastTap = -Infinity;
-let wasAground = false;
-function setPressure(pressure: 0 | 1 | 2) {
-  eight.pressure = pressure;
-  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pressure]')) {
-    button.setAttribute('aria-pressed', button.dataset.pressure === String(pressure) ? 'true' : 'false');
-  }
-}
-function strokeUI() {
-  eight.stroke();
-  lastTap = time;
-  const b = $('strokeBtn');
-  b.classList.add('pulse');
-  setTimeout(() => b.classList.remove('pulse'), 120);
 }
 
 $('play').addEventListener('click', () => {
@@ -204,68 +153,30 @@ $('highTideBtn').addEventListener('click', () => seekTide('high'));
 $('soundBtn').addEventListener('click', toggleSound);
 $('dockBtn').addEventListener('click', goDock);
 $('walkBtn').addEventListener('click', toWalk);
-$('camBtn').addEventListener('click', () => {
-  chase = !chase;
-  $('camBtn').textContent = chase ? 'Cox seat' : 'Chase cam';
-});
-$('strokeBtn').addEventListener('click', strokeUI);
-// [realism:stroke]
-$('pressureLight').addEventListener('click', () => setPressure(0));
-$('pressureHalf').addEventListener('click', () => setPressure(1));
-$('pressureFull').addEventListener('click', () => setPressure(2));
-$('backBtn').addEventListener('click', () => {
-  if (eight.aground) eight.backStroke();
-});
+$('boardBtn').addEventListener('click', board);
 $('todBtn').textContent = PRESETS[env.presetIndex].name;
 
 canvas.addEventListener('click', () => {
   if (mode !== 'walk') return;
   if (!locked()) lock();
-  else if (nearBoat()) board();
 });
-canvas.addEventListener('pointerdown', (e) => {
-  if (mode === 'row') {
-    dragging = true;
-    canvas.setPointerCapture(e.pointerId);
-  }
-});
-canvas.addEventListener('pointerup', () => (dragging = false));
 document.addEventListener('pointerlockchange', syncUI);
 document.addEventListener('mousemove', (e) => {
   if (mode === 'walk' && locked()) player.look(e.movementX, e.movementY);
-  else if (mode === 'row' && dragging) {
-    coxYaw = THREE.MathUtils.clamp(coxYaw - e.movementX * 0.003, -2.0, 2.0);
-    // [realism:stroke]
-    coxPitch = THREE.MathUtils.clamp(coxPitch - e.movementY * 0.003, -1.1, 0.6);
-  }
 });
 
-// [realism:stroke]
 window.addEventListener('keydown', (e) => {
   if (mode === 'intro') return;
-  if ((e.target as HTMLElement).tagName === 'BUTTON' && (e.code === 'Space' || e.code === 'Enter')) {
-    e.preventDefault();
-  }
+  if ((e.target as HTMLElement).tagName === 'BUTTON' && (e.code === 'Space' || e.code === 'Enter')) return;
   keys.add(e.code);
   if (e.code === 'KeyT') cycleTod();
   if (e.code === 'KeyM') toggleSound();
   if (mode === 'walk') {
-    if (e.code === 'KeyE') {
-      if (!handling.next() && nearBoat()) board(); // [realism:handling]
-    }
+    if (e.code === 'KeyE' && !e.repeat) board();
     if (e.code === 'Space') e.preventDefault();
-  } else if (mode === 'row') {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      if (!e.repeat) strokeUI();
-    }
-    if (e.code === 'KeyC') $('camBtn').click();
-    if (e.code === 'Digit1') setPressure(0);
-    if (e.code === 'Digit2') setPressure(1);
-    if (e.code === 'Digit3') setPressure(2);
-    if (e.code === 'KeyR' && !e.repeat) eight.backStroke();
-    if (e.code === 'KeyE') handling.dock(); // [realism:handling]
-    if (e.code === 'Escape' && !locked()) toWalk();
+  } else if (mode === 'launch') {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    if (e.code === 'Escape') toWalk();
   }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -288,49 +199,29 @@ function whereLabel() {
   return 'Apron';
 }
 
-const fmtSplit = (v: number) => {
-  if (v < 0.4) return '—';
-  const s = 500 / v;
-  const m = Math.floor(s / 60);
-  return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-};
-
 const clock = new THREE.Clock();
 const focus = new THREE.Vector3();
 const dir = new THREE.Vector3();
-const _prev = new THREE.Vector3(); // [realism:handling]
 let time = 0;
 let hudTimer = 0;
 
-// [realism:stroke]
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   time += dt;
   updateConditions(dt);
   for (const system of systems) system.update(dt, time);
-  const moored = mode !== 'row';
-  if (mode === 'row') {
+  if (mode === 'launch') {
     const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
-    if (keys.has('Space') && !eight.catchQueued && time - lastTap >= 60 / eight.rate) strokeUI();
-    // [realism:stroke]
-    eight.moored = moored;
-    eight.update(dt, steer, time);
-    if (eight.aground && !wasAground) toast('Aground. Back it down.', 4);
-    if (eight.aground !== wasAground) setHelp();
-    wasAground = eight.aground;
-    eight.group.updateMatrixWorld();
-    eight.applyCamera(camera, coxYaw, coxPitch, chase, dt);
-    sound.setSpeed(Math.abs(eight.speed));
+    const forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    launch.update(dt, time, forward, steer, true);
+    launch.applyCamera(camera);
+    sound.setSpeed(Math.abs(launch.speed));
   } else {
-    // [realism:stroke]
-    eight.moored = moored;
-    eight.update(dt, 0, time);
+    launch.update(dt, time, 0, 0, false);
     if (mode === 'walk') {
-      _prev.copy(player.pos); // [realism:handling]
       const fell = player.update(dt, locked() ? keys : none);
-      handling.constrain(_prev, dt); // [realism:handling]
       if (fell && player.pos.y < conditions.level - 0.4) {
-        player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.1);
+        spawn();
         toast('Splash! Back on the dock.');
       }
     } else {
@@ -346,32 +237,20 @@ function frame() {
   hudTimer -= dt;
   if (hudTimer <= 0) {
     hudTimer = 0.1;
-    // [realism:water]
     const arrow = conditions.levelRate > 0 ? '↑' : '↓';
     $('tideChip').textContent = `Tide ${conditions.tideHeight.toFixed(1)} m ${arrow} ${tidePhase()}`;
     $('windChip').textContent = `Wind ${Math.round(conditions.wind.length() / KT)} kt ${compassPoint(conditions.windFrom)}`;
-    if (mode === 'row') {
-      $('backBtn').classList.toggle('hidden', !eight.aground);
-      $('spm').textContent = eight.spm > 0 ? eight.spm.toFixed(0) : '—';
-      $('split').textContent = fmtSplit(eight.avgSpeed);
-      $('speed').textContent = eight.avgSpeed.toFixed(1);
-      $('dist').textContent = eight.distance.toFixed(0);
-      $('where').textContent = `${eight.phase} · Redwood Creek`;
-      $('rudderMarker').style.left = `${50 + (eight.rudder / 0.262) * 50}%`;
-      const rp = handling.rowPrompt(); // [realism:handling]
-      const pr = $('prompt');
-      pr.classList.toggle('hidden', rp === null);
-      if (rp !== null) pr.textContent = rp;
-      for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pressure]')) {
-        button.setAttribute('aria-pressed', button.dataset.pressure === String(eight.pressure) ? 'true' : 'false');
-      }
+    if (mode === 'launch') {
+      $('speed').textContent = Math.abs(launch.speed).toFixed(1);
+      $('dist').textContent = launch.distance.toFixed(0);
+      $('where').textContent = 'Redwood Creek';
     } else if (mode === 'walk') {
       $('where').textContent = whereLabel();
-      const hp = handling.prompt(); // [realism:handling]
-      const show = locked() && (hp !== null || nearBoat());
+      const show = nearLaunch();
       const pr = $('prompt');
       pr.classList.toggle('hidden', !show);
-      if (show) pr.textContent = hp ?? 'Press E to cox the varsity eight'; // [realism:handling]
+      $('boardBtn').classList.toggle('hidden', !show);
+      if (show) pr.textContent = 'Press E to board the launch';
     }
   }
   if (toastTimer > 0) {
@@ -382,20 +261,18 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
-// [realism:birds]
 const birdFocus = new THREE.Vector3();
-initBirds(scene, () => (mode === 'row' ? birdFocus.set(eight.x, conditions.level, eight.z) : player.pos), { muted: () => sound.muted });
+initBirds(scene, () => (mode === 'launch' ? birdFocus.set(launch.x, conditions.level, launch.z) : player.pos), { muted: () => sound.muted });
 
 syncUI();
 frame();
-// [realism:water] [realism:stroke]
 Object.assign(window, {
   __app: {
     scene,
     camera,
     renderer,
     player,
-    eight,
+    launch,
     env,
     conditions,
     systems,
@@ -408,8 +285,5 @@ Object.assign(window, {
     board,
     toWalk,
     goDock,
-    strokeUI,
-    setPressure,
-    handling, // [realism:handling]
   },
 });
