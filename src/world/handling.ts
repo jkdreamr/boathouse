@@ -127,7 +127,7 @@ const ANIMS = new Set<Phase>([
 const WALK_OUT_SUBS = new Set(['waist', 'waitShoulder', 'waitOverhead', 'waitRoll']);
 const WALK_IN_SUBS = new Set(['overIn', 'waistIn', 'u_waitShoulders']);
 
-const _cp = { pos: new THREE.Vector3(), yaw: 0, walkPhase: 0, walk: 0, crouch: 0, handL: null as THREE.Vector3 | null, handR: null as THREE.Vector3 | null, headTilt: 0 };
+const _cp = { pos: new THREE.Vector3(), yaw: 0, walkPhase: 0, walk: 0, crouch: 0, handL: null as THREE.Vector3 | null, handR: null as THREE.Vector3 | null, headTilt: 0, hull: null as THREE.Object3D | null, dt: 0 }; // [people:carry] hull + dt
 
 export class Handling {
   stowed = false;
@@ -1275,6 +1275,8 @@ export class Handling {
       _cp.handL = handL;
       _cp.handR = handR;
       _cp.headTilt = tilt;
+      _cp.hull = this.carried.visible ? this.carried : null; // [people:carry]
+      _cp.dt = dt; // [people:carry]
       c.fig.setPose(_cp);
       if (c.oar && this.oarsMode === 'hand') {
         c.oar.visible = true;
