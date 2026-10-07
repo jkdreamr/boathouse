@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stanford Rowing Center · Redwood Creek</title>
     <meta name="description" content="Walk the Stanford boathouse on Redwood Creek and cox an eight." />
@@ -18,6 +19,13 @@
         <span id="where">Apron</span>
       </div>
       <nav>
+        <!-- [realism:water] -->
+        <span id="tideChip" class="hudchip">Tide 1.6 m ↑ Flood</span>
+        <span id="windChip" class="hudchip">Wind 15 kt NW</span>
+        <div class="tide-controls">
+          <button id="lowTideBtn" type="button">Low tide</button>
+          <button id="highTideBtn" type="button">High tide</button>
+        </div>
         <button id="todBtn" type="button" title="Time of day (T)">Golden hour</button>
         <button id="soundBtn" type="button" title="Sound (M)">Sound on</button>
         <button id="dockBtn" type="button" title="Jump to the launch dock">Go to the dock</button>
@@ -26,26 +34,36 @@
 
     <div id="help" class="hidden"></div>
 
+    <!-- [realism:stroke] -->
     <section id="rowPanel" class="hidden" aria-label="Rowing controls">
       <div class="stats">
-        <div><b id="spm">—</b><span>stroke rate</span></div>
-        <div><b id="split">—</b><span>split /500m</span></div>
-        <div><b id="speed">0.0</b><span>m/s</span></div>
-        <div><b id="dist">0</b><span>meters</span></div>
+        <div><b id="spm">—</b><span>Stroke Rate</span></div>
+        <div><b id="split">—</b><span>Split /500m</span></div>
+        <div><b id="speed">0.0</b><span>Speed (m/s)</span></div>
+        <div><b id="dist">0</b><span>Meters</span></div>
+        <div class="rudderStat">
+          <div class="rudderEnds"><span>Port</span><span>Starboard</span></div>
+          <div class="rudderTrack" role="img" aria-label="Rudder position">
+            <i id="rudderMarker"></i>
+          </div>
+          <span>Rudder</span>
+        </div>
       </div>
       <div class="controls">
-        <div class="rate">
-          <button id="rateDown" type="button" aria-label="Lower rate">−</button>
-          <span>rate <b id="rateVal">24</b></span>
-          <button id="rateUp" type="button" aria-label="Raise rate">+</button>
+        <div class="pressure" role="group" aria-label="Stroke pressure">
+          <button id="pressureLight" type="button" data-pressure="0" aria-pressed="false">Light</button>
+          <button id="pressureHalf" type="button" data-pressure="1" aria-pressed="true">Half</button>
+          <button id="pressureFull" type="button" data-pressure="2" aria-pressed="false">Full</button>
         </div>
-        <button id="strokeBtn" type="button">STROKE</button>
+        <button id="strokeBtn" type="button">Stroke</button>
         <div class="side">
+          <button id="backBtn" class="hidden" type="button">Back it down (R)</button>
           <button id="camBtn" type="button">Chase cam</button>
           <button id="walkBtn" type="button">Return to walk</button>
         </div>
       </div>
     </section>
+    <!-- [/realism:stroke] -->
 
     <div id="pause" class="hidden"><p>Click to look around</p></div>
 
@@ -59,18 +77,21 @@
         </p>
         <button id="play" type="button">Enter the boathouse</button>
         <dl class="keys">
-          <div><dt>WASD</dt><dd>walk</dd></div>
-          <div><dt>Mouse</dt><dd>look</dd></div>
-          <div><dt>E</dt><dd>board the 8+</dd></div>
-          <div><dt>Space</dt><dd>stroke</dd></div>
-          <div><dt>A / D</dt><dd>steer</dd></div>
-          <div><dt>T</dt><dd>time of day</dd></div>
+          <div><dt>WASD</dt><dd>Walk</dd></div>
+          <div><dt>Mouse</dt><dd>Look</dd></div>
+          <div><dt>E</dt><dd>Board the eight</dd></div>
+          <div><dt>Space</dt><dd>Stroke</dd></div>
+          <div><dt>A / D</dt><dd>Steer</dd></div>
+          <div><dt>T</dt><dd>Time of day</dd></div>
         </dl>
         <p class="fine">Stylized, reference-based model · not affiliated with Stanford University</p>
       </div>
     </section>
 
     <div id="toast" class="hidden"></div>
+    <!-- [realism:handling] -->
+    <div id="callout" class="hidden"></div>
+    <button id="callBtn" class="hidden" type="button"></button>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

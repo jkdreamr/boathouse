@@ -2,13 +2,23 @@ import './style.css';
 import * as THREE from 'three';
 import { Sound } from './audio';
 import { Player } from './player';
-import { Eight } from './rowing/eight';
+import { CrewBoat } from './rowing/crewboat';
+import { compassPoint, conditions, KT, seekTide, tidePhase, updateConditions } from './sim/conditions';
+import { systems } from './sim/systems';
 import { setMaxAnisotropy } from './textures';
+import { floorAt, floors } from './world/collide';
 import { buildBoathouse, BALCONY_Y } from './world/boathouse';
 import { Environment, PRESETS } from './world/env';
 import { buildBackdrop } from './world/props';
-import { buildSite, DOCK, DOCK_Y, MOORING } from './world/site';
-import { buildTerrain, PAD_Y } from './world/terrain';
+import { buildSite, dockDeckY, DOCK, gangway, MOORING } from './world/site';
+import { buildTerrain, centerline, channelDepthDist, PAD_Y, terrainHeight } from './world/terrain';
+// [realism:interior]
+import { interiorLabel } from './world/interior';
+import { Handling } from './world/handling'; // [realism:handling]
+// [realism:traffic]
+import { initTraffic } from './world/traffic';
+// [realism:birds]
+import { initBirds } from './world/birds';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -24,21 +34,40 @@ setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 60000);
+camera.layers.enable(1);
 const env = new Environment(scene, renderer);
 scene.add(buildTerrain());
 buildSite(scene);
 buildBoathouse(scene);
 buildBackdrop(scene);
 
-const eight = new Eight(scene);
+const eight = new CrewBoat(scene, '8+');
 eight.reset(MOORING, 0);
+eight.group.traverse((object) => object.layers.set(1));
 const sound = new Sound();
 eight.onCatch = () => sound.catch();
 eight.onFinish = () => sound.finish();
 
 const player = new Player(camera);
-const spawn = () => player.place(9, DOCK_Y, DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
+// [realism:traffic]
+initTraffic(scene, () => eight, camera);
+// [realism:water]
+const spawn = () => player.place(9, dockDeckY(), DOCK.minZ + 1.2, Math.PI - 0.35, 0.16);
 spawn();
+// [realism:handling] boat carrying crew: rack -> launch -> board, and dock -> rack
+const handling = new Handling({
+  scene,
+  camera,
+  player,
+  eight,
+  mode: () => mode,
+  boardInPlace: () => board(true),
+  enterWalk: () => {
+    mode = 'walk';
+    keys.clear();
+    syncUI();
+  },
+});
 
 type Mode = 'intro' | 'walk' | 'row';
 let mode: Mode = 'intro';
@@ -59,6 +88,11 @@ function toast(msg: string, secs = 3) {
   toastTimer = secs;
 }
 
+function clearToast() {
+  toastTimer = 0;
+  $('toast').classList.add('hidden');
+}
+
 function lock() {
   try {
     const r = canvas.requestPointerLock() as unknown as Promise<void> | undefined;
@@ -69,15 +103,17 @@ function lock() {
 }
 
 function nearBoat() {
+  if (handling.active || handling.stowed) return false; // [realism:handling]
   const p = player.pos;
-  return p.y < DOCK_Y + 0.3 && p.y > DOCK_Y - 0.3 && p.z < DOCK.minZ + 1.8 && Math.abs(p.x - eight.x) < 9.5;
+  return p.y < dockDeckY() + 0.3 && p.y > dockDeckY() - 0.3 && p.z < DOCK.minZ + 1.8 && Math.abs(p.x - eight.x) < 9.5; // [realism:water]
 }
 
+// [realism:stroke]
 function setHelp() {
-  $('help').innerHTML =
+  $('help').textContent =
     mode === 'row'
-      ? '<kbd>Space</kbd> stroke (hold to keep rowing) · <kbd>A</kbd>/<kbd>D</kbd> steer · <kbd>[</kbd>/<kbd>]</kbd> rate · drag to look · <kbd>C</kbd> camera · <kbd>Esc</kbd> back to walk'
-      : '<kbd>WASD</kbd> walk · <kbd>Shift</kbd> run · <kbd>Space</kbd> jump · <kbd>E</kbd> board the 8+ at the dock · <kbd>T</kbd> time of day · <kbd>Esc</kbd> release mouse';
+      ? `Space to stroke (tap the rhythm, hold to keep it) · A/D to steer · 1–3 pressure${eight.aground ? ' · R to back it down' : ''} · C camera · Esc to walk`
+      : 'WASD to walk · Shift to run · Space to jump · E to board the varsity eight · T for time of day · Esc to release the mouse';
 }
 
 function syncUI() {
@@ -87,36 +123,42 @@ function syncUI() {
   $('rowPanel').classList.toggle('hidden', mode !== 'row');
   $('reticle').classList.toggle('hidden', mode !== 'walk');
   $('pause').classList.toggle('hidden', !(mode === 'walk' && !locked()));
-  $('modeChip').textContent = mode === 'row' ? 'ROWING' : 'WALK';
+  $('modeChip').textContent = mode === 'row' ? 'Rowing' : 'Walking';
   $('dockBtn').textContent = mode === 'row' ? 'Back to the dock' : 'Go to the dock';
   if (mode !== 'walk') $('prompt').classList.add('hidden');
   setHelp();
 }
 
-function board() {
+// [realism:stroke] [realism:handling]
+function board(inPlace = false) {
+  clearToast();
   mode = 'row';
   chase = false;
   coxYaw = 0;
   coxPitch = 0;
+  lastTap = -Infinity;
+  wasAground = false;
   if (locked()) document.exitPointerLock();
-  eight.reset(MOORING, 0);
+  if (!inPlace) eight.reset(MOORING, 0); // [realism:handling]
   sound.start();
   syncUI();
-  toast('You’re in the cox seat. Press Space or STROKE to row.', 4);
+  toast('You’re in the cox seat. Press Space or Stroke to row.', 4);
 }
 
 function toWalk() {
+  clearToast();
   mode = 'walk';
   keys.clear();
   if (locked()) document.exitPointerLock();
   eight.reset(MOORING, 0);
-  player.place(eight.x + 3, DOCK_Y, DOCK.minZ + 1.1, 0.2, -0.15);
+  player.place(eight.x + 3, dockDeckY(), DOCK.minZ + 1.1, 0.2, -0.15); // [realism:water]
   syncUI();
 }
 
 function goDock() {
+  if (handling.active) return; // [realism:handling]
   if (mode === 'row') return toWalk();
-  player.place(-2, DOCK_Y, DOCK.minZ + 1.0, 0.1, -0.12);
+  player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.12); // [realism:water]
   toast('Launch dock. Walk up to the eight and press E.');
 }
 
@@ -132,13 +174,18 @@ function toggleSound() {
   $('soundBtn').textContent = sound.muted ? 'Sound off' : 'Sound on';
 }
 
-function setRate(r: number) {
-  eight.rate = THREE.MathUtils.clamp(r, 18, 36);
-  $('rateVal').textContent = String(eight.rate);
+// [realism:stroke]
+let lastTap = -Infinity;
+let wasAground = false;
+function setPressure(pressure: 0 | 1 | 2) {
+  eight.pressure = pressure;
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pressure]')) {
+    button.setAttribute('aria-pressed', button.dataset.pressure === String(pressure) ? 'true' : 'false');
+  }
 }
-
 function strokeUI() {
   eight.stroke();
+  lastTap = time;
   const b = $('strokeBtn');
   b.classList.add('pulse');
   setTimeout(() => b.classList.remove('pulse'), 120);
@@ -151,6 +198,9 @@ $('play').addEventListener('click', () => {
   lock();
 });
 $('todBtn').addEventListener('click', cycleTod);
+// [realism:water]
+$('lowTideBtn').addEventListener('click', () => seekTide('low'));
+$('highTideBtn').addEventListener('click', () => seekTide('high'));
 $('soundBtn').addEventListener('click', toggleSound);
 $('dockBtn').addEventListener('click', goDock);
 $('walkBtn').addEventListener('click', toWalk);
@@ -159,8 +209,13 @@ $('camBtn').addEventListener('click', () => {
   $('camBtn').textContent = chase ? 'Cox seat' : 'Chase cam';
 });
 $('strokeBtn').addEventListener('click', strokeUI);
-$('rateDown').addEventListener('click', () => setRate(eight.rate - 2));
-$('rateUp').addEventListener('click', () => setRate(eight.rate + 2));
+// [realism:stroke]
+$('pressureLight').addEventListener('click', () => setPressure(0));
+$('pressureHalf').addEventListener('click', () => setPressure(1));
+$('pressureFull').addEventListener('click', () => setPressure(2));
+$('backBtn').addEventListener('click', () => {
+  if (eight.aground) eight.backStroke();
+});
 $('todBtn').textContent = PRESETS[env.presetIndex].name;
 
 canvas.addEventListener('click', () => {
@@ -180,10 +235,12 @@ document.addEventListener('mousemove', (e) => {
   if (mode === 'walk' && locked()) player.look(e.movementX, e.movementY);
   else if (mode === 'row' && dragging) {
     coxYaw = THREE.MathUtils.clamp(coxYaw - e.movementX * 0.003, -2.0, 2.0);
-    coxPitch = THREE.MathUtils.clamp(coxPitch - e.movementY * 0.003, -0.6, 0.6);
+    // [realism:stroke]
+    coxPitch = THREE.MathUtils.clamp(coxPitch - e.movementY * 0.003, -1.1, 0.6);
   }
 });
 
+// [realism:stroke]
 window.addEventListener('keydown', (e) => {
   if (mode === 'intro') return;
   if ((e.target as HTMLElement).tagName === 'BUTTON' && (e.code === 'Space' || e.code === 'Enter')) {
@@ -193,7 +250,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyT') cycleTod();
   if (e.code === 'KeyM') toggleSound();
   if (mode === 'walk') {
-    if (e.code === 'KeyE' && nearBoat()) board();
+    if (e.code === 'KeyE') {
+      if (!handling.next() && nearBoat()) board(); // [realism:handling]
+    }
     if (e.code === 'Space') e.preventDefault();
   } else if (mode === 'row') {
     if (e.code === 'Space') {
@@ -201,8 +260,11 @@ window.addEventListener('keydown', (e) => {
       if (!e.repeat) strokeUI();
     }
     if (e.code === 'KeyC') $('camBtn').click();
-    if (e.code === 'BracketLeft' || e.code === 'Minus') setRate(eight.rate - 2);
-    if (e.code === 'BracketRight' || e.code === 'Equal') setRate(eight.rate + 2);
+    if (e.code === 'Digit1') setPressure(0);
+    if (e.code === 'Digit2') setPressure(1);
+    if (e.code === 'Digit3') setPressure(2);
+    if (e.code === 'KeyR' && !e.repeat) eight.backStroke();
+    if (e.code === 'KeyE') handling.dock(); // [realism:handling]
     if (e.code === 'Escape' && !locked()) toWalk();
   }
 });
@@ -216,10 +278,13 @@ window.addEventListener('resize', () => {
 
 function whereLabel() {
   const p = player.pos;
+  // [realism:interior]
+  const room = interiorLabel(p.x, p.y, p.z);
+  if (room) return room;
   if (p.y > BALCONY_Y - 0.3 && p.z < 12.2) return 'Balcony';
   if (p.y > PAD_Y + 0.4) return 'Stairs';
   if (p.x > -24 && p.x < 24 && p.z > 12 && p.z < 34) return 'Boat bays';
-  if (p.z < -0.5) return p.y < DOCK_Y + 0.3 ? 'Launch dock' : 'Gangway';
+  if (p.z < -0.5) return p.y < dockDeckY() + 0.3 ? 'Launch dock' : 'Gangway'; // [realism:water]
   return 'Apron';
 }
 
@@ -233,25 +298,39 @@ const fmtSplit = (v: number) => {
 const clock = new THREE.Clock();
 const focus = new THREE.Vector3();
 const dir = new THREE.Vector3();
+const _prev = new THREE.Vector3(); // [realism:handling]
 let time = 0;
 let hudTimer = 0;
 
+// [realism:stroke]
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   time += dt;
+  updateConditions(dt);
+  for (const system of systems) system.update(dt, time);
+  const moored = mode !== 'row';
   if (mode === 'row') {
     const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
-    if (keys.has('Space')) eight.stroke();
+    if (keys.has('Space') && !eight.catchQueued && time - lastTap >= 60 / eight.rate) strokeUI();
+    // [realism:stroke]
+    eight.moored = moored;
     eight.update(dt, steer, time);
+    if (eight.aground && !wasAground) toast('Aground. Back it down.', 4);
+    if (eight.aground !== wasAground) setHelp();
+    wasAground = eight.aground;
     eight.group.updateMatrixWorld();
     eight.applyCamera(camera, coxYaw, coxPitch, chase, dt);
-    sound.setSpeed(eight.speed);
+    sound.setSpeed(Math.abs(eight.speed));
   } else {
+    // [realism:stroke]
+    eight.moored = moored;
     eight.update(dt, 0, time);
     if (mode === 'walk') {
+      _prev.copy(player.pos); // [realism:handling]
       const fell = player.update(dt, locked() ? keys : none);
-      if (fell) {
-        player.place(-2, DOCK_Y, DOCK.minZ + 1.0, 0.1, -0.1);
+      handling.constrain(_prev, dt); // [realism:handling]
+      if (fell && player.pos.y < conditions.level - 0.4) {
+        player.place(-2, dockDeckY(), DOCK.minZ + 1.0, 0.1, -0.1);
         toast('Splash! Back on the dock.');
       }
     } else {
@@ -267,18 +346,32 @@ function frame() {
   hudTimer -= dt;
   if (hudTimer <= 0) {
     hudTimer = 0.1;
+    // [realism:water]
+    const arrow = conditions.levelRate > 0 ? '↑' : '↓';
+    $('tideChip').textContent = `Tide ${conditions.tideHeight.toFixed(1)} m ${arrow} ${tidePhase()}`;
+    $('windChip').textContent = `Wind ${Math.round(conditions.wind.length() / KT)} kt ${compassPoint(conditions.windFrom)}`;
     if (mode === 'row') {
+      $('backBtn').classList.toggle('hidden', !eight.aground);
       $('spm').textContent = eight.spm > 0 ? eight.spm.toFixed(0) : '—';
-      $('split').textContent = fmtSplit(eight.speed);
-      $('speed').textContent = eight.speed.toFixed(1);
+      $('split').textContent = fmtSplit(eight.avgSpeed);
+      $('speed').textContent = eight.avgSpeed.toFixed(1);
       $('dist').textContent = eight.distance.toFixed(0);
       $('where').textContent = `${eight.phase} · Redwood Creek`;
+      $('rudderMarker').style.left = `${50 + (eight.rudder / 0.262) * 50}%`;
+      const rp = handling.rowPrompt(); // [realism:handling]
+      const pr = $('prompt');
+      pr.classList.toggle('hidden', rp === null);
+      if (rp !== null) pr.textContent = rp;
+      for (const button of document.querySelectorAll<HTMLButtonElement>('[data-pressure]')) {
+        button.setAttribute('aria-pressed', button.dataset.pressure === String(eight.pressure) ? 'true' : 'false');
+      }
     } else if (mode === 'walk') {
       $('where').textContent = whereLabel();
-      const show = locked() && nearBoat();
+      const hp = handling.prompt(); // [realism:handling]
+      const show = locked() && (hp !== null || nearBoat());
       const pr = $('prompt');
       pr.classList.toggle('hidden', !show);
-      if (show) pr.innerHTML = '<kbd>E</kbd> or click: cox the varsity 8+';
+      if (show) pr.textContent = hp ?? 'Press E to cox the varsity eight'; // [realism:handling]
     }
   }
   if (toastTimer > 0) {
@@ -289,6 +382,34 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
+// [realism:birds]
+const birdFocus = new THREE.Vector3();
+initBirds(scene, () => (mode === 'row' ? birdFocus.set(eight.x, conditions.level, eight.z) : player.pos), { muted: () => sound.muted });
+
 syncUI();
 frame();
-Object.assign(window, { __app: { scene, camera, player, eight, env, board, toWalk, goDock } });
+// [realism:water] [realism:stroke]
+Object.assign(window, {
+  __app: {
+    scene,
+    camera,
+    renderer,
+    player,
+    eight,
+    env,
+    conditions,
+    systems,
+    gangway,
+    floors,
+    floorAt,
+    terrainHeight,
+    channelDepthDist,
+    centerline,
+    board,
+    toWalk,
+    goDock,
+    strokeUI,
+    setPressure,
+    handling, // [realism:handling]
+  },
+});
