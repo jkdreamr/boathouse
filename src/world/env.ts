@@ -149,14 +149,14 @@ void main() {
 
   vec2 t = vec2(0.0);
   t += tangentAt(q * size / 103.0 - uFlow.xy) * 0.55;
-  t += tangentAt(q * size / 47.0 - uFlow.zw + vec2(0.37, 0.71)) * 0.35;
   float pixelWidth = max(length(dFdx(xz)), length(dFdy(xz)));
-  float detail = 1.0 - smoothstep(0.15, 0.8, pixelWidth);
+  float detail = 1.0 - smoothstep(0.06, 0.45, pixelWidth);
+  t += tangentAt(q * size / 47.0 - uFlow.zw + vec2(0.37, 0.71)) * 0.35 * detail;
   t += tangentAt(q * size / 17.0 - uFlow.zw * 2.6 + vec2(0.13, 0.29)) * 0.22 * (0.4 + 0.6 * uChop) * detail;
   // slow, very long modulation so tiling never reads
   vec2 big = tangentAt(xz / 1091.0 + vec2(time / 109.0, time / 113.0)) + tangentAt(xz / 3307.0 - vec2(time / 211.0, 0.0));
   t += big * 0.12;
-  float ta = min(0.7, amp * 0.55) * mix(0.7, 1.0, detail);
+  float ta = min(0.42, amp * 0.34) * mix(0.5, 1.0, detail);
   vec2 tw = (t.x * wd + t.y * 0.8 * wp) * ta;
   vec3 surfaceNormal = normalize(vec3(tw.x, 1.0, tw.y) + vec3(big.x, 0.0, big.y) * 0.004);
 
@@ -244,7 +244,7 @@ export class Environment {
     scene.add(this.sun, this.sun.target, this.hemi);
 
     const normals = waterNormalTexture();
-    this.water = new Water(new THREE.PlaneGeometry(60000, 60000), {
+    this.water = new Water(new THREE.PlaneGeometry(30000, 30000), {
       textureWidth: 1024,
       textureHeight: 1024,
       waterNormals: normals,
