@@ -357,7 +357,7 @@ export class StandingSolver {
       }
     }
     // a grip still metres away (walking up to the station) is not held yet
-    for (let i = 0; i < 2; i++) if (_has[i] && Math.hypot(_tgt[i].x, _tgt[i].z) > 1.2) _has[i] = false;
+    for (let i = 0; i < 2; i++) if (_has[i] && Math.hypot(_tgt[i].x, _tgt[i].y - this.shoulderHeight, _tgt[i].z) > 1.25) _has[i] = false;
     let gy = 0;
     let gn = 0;
     for (let i = 0; i < 2; i++) if (_has[i]) ((gy += _tgt[i].y), gn++);
