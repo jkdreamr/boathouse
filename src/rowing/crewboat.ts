@@ -205,11 +205,7 @@ export class CrewBoat {
     fin.position.set(-this.hullSpec.length / 2 + 0.7, -0.2, 0);
     group.add(fin);
 
-    if (this.hasCox) {
-      const coxSeat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.42), carbon);
-      coxSeat.position.set(this.coxX + 0.1, 0.12, 0);
-      group.add(coxSeat);
-    }
+    // [people:cox] the cox seat is built by Coxswain
     this.cox = new Coxswain({ seed: 9173, coxX: this.coxX, spec: this.hullSpec, withFigure: this.hasCox });
     this.coxPosition = this.cox.eye;
     group.add(this.cox.group);
@@ -758,7 +754,7 @@ export class CrewBoat {
           this.cox.setReadout(roundedSpm, splitText);
         }
       }
-      this.cox.update(this.hands, this.rudder, time);
+      this.cox.update(this.hands, this.rudder, time, this.speed); // [people:cox]
     }
     for (const fx of this.fx) {
       if (!fx.m.visible) continue;
@@ -781,7 +777,7 @@ export class CrewBoat {
     if (!chase && this.hasCox) {
       this.cox?.setFirstPerson(true);
       cam.position.copy(this.coxPosition).applyMatrix4(group.matrixWorld);
-      _lookEuler.set(pitchOff - 0.37, -Math.PI / 2 + yawOff, 0, 'YXZ');
+      _lookEuler.set(pitchOff + (this.cox?.pitch ?? -0.37), -Math.PI / 2 + yawOff, 0, 'YXZ'); // [people:cox]
       _localQ.setFromEuler(_lookEuler);
       group.getWorldQuaternion(_boatQ);
       cam.quaternion.copy(_boatQ).multiply(_localQ);
