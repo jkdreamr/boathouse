@@ -18,13 +18,13 @@ function tex(c: HTMLCanvasElement, tileW: number, tileH: number, color = true) {
 }
 
 function rgb(hex: string) {
-  const c = new THREE.Color(hex);
+  const c = new THREE.Color(hex).convertLinearToSRGB();
   return [c.r * 255, c.g * 255, c.b * 255];
 }
 
 /**
  * Split-face CMU, one tile = 4 m x 5.6 m (28 courses of 8x16 in block).
- * Banding per the Commons photos: ~5 rose courses at the base and four maroon accent courses in the upper half.
+ * Banding per the Commons photos: charcoal base, light gray upper wall, one dark belt course.
  */
 function cmuTex() {
   const courses = 28;
@@ -42,11 +42,11 @@ function cmuTex() {
   const bd = bdI.data;
   const rd = rdI.data;
   const r = rand(41);
-  const tan = rgb('#b8b1a7');
-  const rose = rgb('#8c7b78');
-  const stripe = rgb('#74605d');
-  const mortar = rgb('#9c968d');
-  const stripes = [12, 15, 18, 21];
+  const tan = rgb('#888f90');
+  const baseDark = rgb('#555d63');
+  const stripe = rgb('#606a72');
+  const mortar = rgb('#979d9d');
+  const stripes = [9, 10, 11];
   // per-block tint + per-block face tilt for the split-face look
   const tint: number[] = [];
   const tiltX: number[] = [];
@@ -76,7 +76,7 @@ function cmuTex() {
   for (let y = 0; y < H; y++) {
     const k = courses - 1 - Math.floor(y / ch);
     const fyc = (y % ch) / ch;
-    const base = k < 5 ? rose : stripes.includes(k) ? stripe : tan;
+    const base = k < 5 ? baseDark : stripes.includes(k) ? stripe : tan;
     const off = k % 2 ? bw / 2 : 0;
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;

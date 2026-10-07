@@ -150,11 +150,13 @@ void main() {
   vec2 t = vec2(0.0);
   t += tangentAt(q * size / 103.0 - uFlow.xy) * 0.55;
   t += tangentAt(q * size / 47.0 - uFlow.zw + vec2(0.37, 0.71)) * 0.35;
-  t += tangentAt(q * size / 17.0 - uFlow.zw * 2.6 + vec2(0.13, 0.29)) * 0.22 * (0.4 + 0.6 * uChop);
+  float pixelWidth = max(length(dFdx(xz)), length(dFdy(xz)));
+  float detail = 1.0 - smoothstep(0.15, 0.8, pixelWidth);
+  t += tangentAt(q * size / 17.0 - uFlow.zw * 2.6 + vec2(0.13, 0.29)) * 0.22 * (0.4 + 0.6 * uChop) * detail;
   // slow, very long modulation so tiling never reads
   vec2 big = tangentAt(xz / 1091.0 + vec2(time / 109.0, time / 113.0)) + tangentAt(xz / 3307.0 - vec2(time / 211.0, 0.0));
   t += big * 0.12;
-  float ta = min(0.7, amp * 0.55);
+  float ta = min(0.7, amp * 0.55) * mix(0.7, 1.0, detail);
   vec2 tw = (t.x * wd + t.y * 0.8 * wp) * ta;
   vec3 surfaceNormal = normalize(vec3(tw.x, 1.0, tw.y) + vec3(big.x, 0.0, big.y) * 0.004);
 
@@ -164,7 +166,7 @@ void main() {
 
   vec3 diffuseLight = vec3(0.0);
   vec3 specularLight = vec3(0.0);
-  float shiny = mix(1400.0, 110.0, clamp(amp, 0.0, 1.0));
+  float shiny = mix(200.0, 85.0, clamp(amp, 0.0, 1.0));
   sunLight(surfaceNormal, eyeDirection, shiny, 1.6 + 0.8 * amp, 0.5, diffuseLight, specularLight);
 
   // distortion grows with chop but is capped near the camera so close-up reflections never tear into contours
@@ -214,6 +216,9 @@ export class Environment {
   private envRT: THREE.WebGLRenderTarget | null = null;
   private skyScene = new THREE.Scene();
   private skyForEnv = new Sky();
+  private shadowRight = new THREE.Vector3();
+  private shadowUp = new THREE.Vector3();
+  private shadowOffset = new THREE.Vector3();
 
   constructor(
     private scene: THREE.Scene,
@@ -310,10 +315,16 @@ export class Environment {
   update(dt: number, focus: THREE.Vector3) {
     this.updateWater(dt);
     const texel = 140 / 4096;
-    const fx = Math.round(focus.x / texel) * texel;
-    const fz = Math.round(focus.z / texel) * texel;
-    this.sun.target.position.set(fx, 0, fz);
-    this.sun.position.set(fx + this.sunDir.x * 300, Math.max(30, this.sunDir.y * 300), fz + this.sunDir.z * 300);
+    const light = this.shadowOffset.set(this.sunDir.x * 300, Math.max(30, this.sunDir.y * 300), this.sunDir.z * 300);
+    this.shadowRight.set(light.z, 0, -light.x).normalize();
+    this.shadowUp.crossVectors(light, this.shadowRight).normalize();
+    const target = this.sun.target.position.set(focus.x, 0, focus.z);
+    // Quantize the light's projection, not world x/z, to keep shadow edges fixed between texels.
+    const right = target.dot(this.shadowRight);
+    const up = target.dot(this.shadowUp);
+    target.addScaledVector(this.shadowRight, Math.round(right / texel) * texel - right);
+    target.addScaledVector(this.shadowUp, Math.round(up / texel) * texel - up);
+    this.sun.position.copy(target).add(light);
   }
 
   /** Drive the water shader from the wind: glassy and mirror-like in calm air, short wind-aligned chop as it builds. */
