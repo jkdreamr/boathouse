@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import { between } from './build';
+import { CARDINAL, DARK, WHITE, makeAnthro, type Anthro } from '../rowing/figure/anthro';
+import { buildFigureGeometry } from '../rowing/figure/body';
+import type { Outfit } from '../rowing/figure/outfit';
+import { B } from '../rowing/figure/rig';
+import { StandingSolver, standingRest, type StandInput } from '../rowing/figure/standing';
+import { FIGURE_MATERIAL } from '../rowing/rower';
 
 export interface CrewPose {
   pos: THREE.Vector3; // feet/ground point, world
@@ -10,204 +15,137 @@ export interface CrewPose {
   handL: THREE.Vector3 | null;
   handR: THREE.Vector3 | null; // world hand targets; null = relaxed arm swinging with the walk
   headTilt: number; // radians sideways (head out from under the hull at shoulders)
+  hull?: THREE.Object3D | null; // carried shell, for grip orientation
+  dt?: number;
 }
 
-const SKIN_TONES = ['#f1c7a5', '#e0ac87', '#c68863', '#a86b47', '#7d4a2d', '#5a3420'];
+/**
+ * Practice kit for walking a shell down: cardinal or white tees and long
+ * sleeves over black spandex tights or shorts, running shoes or just socks.
+ */
+const TOPS: [string, Outfit['topStyle']][] = [
+  [CARDINAL, 'tee'],
+  [WHITE, 'tee'],
+  [CARDINAL, 'longsleeve'],
+  ['#1f1f22', 'tee'],
+  [WHITE, 'longsleeve'],
+  ['#8a8d8f', 'tee'],
+  [CARDINAL, 'tee'],
+  ['#5e0f0f', 'longsleeve'],
+];
+const BOTTOMS: [string, Outfit['bottomStyle']][] = [
+  ['#18181a', 'tights'],
+  ['#18181a', 'shorts'],
+  [DARK, 'shorts'],
+  ['#18181a', 'tights'],
+  ['#2b2f3a', 'shorts'],
+];
+const SHOES = ['#e8e8e4', '#202022', '#7d8288', '#f2f1ec', '#3a3d44', '#c9ccd0'];
 
-const limbGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
-const headGeo = new THREE.SphereGeometry(0.105, 14, 10);
-const hairGeo = new THREE.SphereGeometry(0.112, 14, 6, 0, Math.PI * 2, 0, Math.PI * 0.42);
-const footGeo = new THREE.BoxGeometry(1, 1, 1);
-const handGeo = new THREE.SphereGeometry(0.045, 8, 6);
-
-const suitMat = new THREE.MeshStandardMaterial({ color: '#8c1515', roughness: 0.7 });
-const shoeMat = new THREE.MeshStandardMaterial({ color: '#2e2d29', roughness: 0.8 });
-const hairMats = ['#1c140f', '#2a1d16', '#4a3020', '#6b4a2b', '#a77b48'].map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9 }));
-const trimMat = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.7 });
-const capMat = new THREE.MeshStandardMaterial({ color: '#f4f2ec', roughness: 0.7 });
-const skinMats = SKIN_TONES.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.7 }));
-
-const _hip = new THREE.Vector3();
-const _knee = new THREE.Vector3();
-const _ankle = new THREE.Vector3();
-const _elbow = new THREE.Vector3();
-const _hand = new THREE.Vector3();
-const _pole = new THREE.Vector3();
-const _a = new THREE.Vector3();
-const _b = new THREE.Vector3();
-const _c = new THREE.Vector3();
-const _fwd = new THREE.Vector3();
-const _side = new THREE.Vector3();
-
-/** 2-bone IK: midpoint between a and b for bone lengths l1/l2, bent toward pole. */
-function ikMid(a: THREE.Vector3, b: THREE.Vector3, l1: number, l2: number, pole: THREE.Vector3, out: THREE.Vector3) {
-  _a.subVectors(b, a);
-  let d = _a.length();
-  const maxD = l1 + l2 - 0.001;
-  if (d > maxD) {
-    _a.multiplyScalar(maxD / d);
-    b.copy(a).add(_a);
-    d = maxD;
-  }
-  if (d < 1e-5) {
-    out.copy(a);
-    out.y += l1;
-    return;
-  }
-  _a.divideScalar(d);
-  const x = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
-  const h = Math.sqrt(Math.max(0, l1 * l1 - x * x));
-  _b.copy(pole).addScaledVector(_a, -pole.dot(_a));
-  const pl = _b.length();
-  if (pl < 1e-5) _b.set(_a.y, _a.z, _a.x);
-  else _b.divideScalar(pl);
-  out.copy(a).addScaledVector(_a, x).addScaledVector(_b, h);
+function rand(seed: number) {
+  let s = (seed * 2654435761) >>> 0;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
 }
 
+function practiceKit(seed: number): Outfit {
+  const r = rand(seed + 11);
+  const [top, topStyle] = TOPS[(seed * 3 + Math.floor(r() * 2)) % TOPS.length];
+  const [bottom, bottomStyle] = BOTTOMS[Math.floor(r() * BOTTOMS.length)];
+  return {
+    top,
+    topStyle,
+    bottom,
+    bottomStyle,
+    accent: top === WHITE ? CARDINAL : r() < 0.5 ? WHITE : null,
+    pfd: null,
+    shoe: SHOES[Math.floor(r() * SHOES.length)],
+  };
+}
+
+const _in: StandInput = { pos: new THREE.Vector3(), yaw: 0, crouch: 0, handL: null, handR: null, hull: null, look: null, dt: 0 };
+const _q = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0);
+let _lastT = -1;
+let _lastDt = 1 / 60;
+
+/**
+ * One rower of the boat-carrying crew: a single GPU-skinned mesh on the shared
+ * 21-bone rig, posed by the standing / walking / carrying solver.
+ */
 export class CrewFigure {
   readonly group = new THREE.Group();
   readonly scale: number;
-  private readonly torso: THREE.Mesh;
-  private readonly pelvis: THREE.Mesh;
-  private readonly neck: THREE.Mesh;
-  private readonly head: THREE.Mesh;
-  private readonly thigh: THREE.Mesh[] = [];
-  private readonly hem: THREE.Mesh[] = [];
-  private readonly bareThigh: THREE.Mesh[] = [];
-  private readonly shin: THREE.Mesh[] = [];
-  private readonly foot: THREE.Mesh[] = [];
-  private readonly uarm: THREE.Mesh[] = [];
-  private readonly farm: THREE.Mesh[] = [];
-  private readonly handM: THREE.Mesh[] = [];
-  private readonly shoulderL = new THREE.Vector3();
-  private readonly shoulderR = new THREE.Vector3();
-  private readonly lastPose = new THREE.Vector3();
+  readonly anthro: Anthro;
+  readonly mesh: THREE.SkinnedMesh;
+  private readonly bones: THREE.Bone[] = [];
+  private readonly solver: StandingSolver;
+  private readonly pos = new THREE.Vector3();
 
   constructor(seed: number) {
-    // men's varsity stature 1.83-2.00 m, matching RowerFigure (base figure is 1.805 m tall)
-    this.scale = (1.83 + (((seed * 16807) % 2147483647) / 2147483647) * 0.17) / 1.805;
-    const skin = skinMats[seed % skinMats.length];
-    const mk = (mat: THREE.Material, shadow = false) => {
-      const m = new THREE.Mesh(limbGeo, mat);
-      m.castShadow = shadow;
-      this.group.add(m);
-      return m;
-    };
-    this.torso = mk(suitMat, true);
-    this.pelvis = mk(suitMat);
-    this.neck = mk(skin);
-    this.head = new THREE.Mesh(headGeo, skin);
-    this.head.castShadow = true;
-    const cap = new THREE.Mesh(hairGeo, seed % 3 === 0 ? capMat : hairMats[(seed * 7) % hairMats.length]);
-    cap.position.set(0, 0.012, -0.025);
-    this.head.add(cap);
-    this.group.add(this.head);
-    for (let i = 0; i < 2; i++) {
-      this.thigh.push(mk(suitMat, true));
-      this.hem.push(mk(trimMat));
-      this.bareThigh.push(mk(skin));
-      this.shin.push(mk(skin, true));
-      this.uarm.push(mk(skin));
-      this.farm.push(mk(skin));
-      const f = new THREE.Mesh(footGeo, shoeMat);
-      this.group.add(f);
-      this.foot.push(f);
-      const h = new THREE.Mesh(handGeo, skin);
-      this.group.add(h);
-      this.handM.push(h);
+    // seed never equals 1, so makeAnthro does not advance the rowers' crew counter
+    const kit = practiceKit(seed);
+    const base = makeAnthro(1000 + seed * 13, 'men');
+    this.anthro = { ...base, shoe: kit.shoe ?? base.shoe };
+    this.scale = this.anthro.H / 1.85;
+    this.solver = new StandingSolver(this.anthro);
+    const rest = standingRest(this.anthro);
+    const geo = buildFigureGeometry(this.anthro, rest, kit);
+    this.mesh = new THREE.SkinnedMesh(geo, FIGURE_MATERIAL);
+    for (let i = 0; i < rest.p.length; i++) {
+      const bone = new THREE.Bone();
+      bone.position.copy(rest.p[i]);
+      bone.quaternion.copy(rest.q[i]);
+      this.bones.push(bone);
+      this.mesh.add(bone);
     }
+    this.mesh.updateMatrixWorld(true);
+    this.mesh.bind(new THREE.Skeleton(this.bones));
+    // no foot stretcher when standing: collapse its plate into the pelvis
+    this.bones[B.stretcher].scale.setScalar(1e-4);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+    this.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1, 0), 1.5);
+    this.group.add(this.mesh);
     this.group.visible = false;
   }
 
+  /** side: -1 = the figure's left shoulder, +1 = right (world). */
   shoulderWorld(side: -1 | 1, out: THREE.Vector3): THREE.Vector3 {
-    return out.copy(side < 0 ? this.shoulderL : this.shoulderR);
+    out.copy(this.solver.rig.p[side < 0 ? B.upArmL : B.upArmR]);
+    return out.applyQuaternion(_q.setFromAxisAngle(UP, this.solver.yaw)).add(this.pos);
   }
 
   setPose(p: CrewPose): void {
-    const s = this.scale;
-    const hipH = 0.98 * s;
-    const torsoLen = 0.5 * s;
-    const thighL = 0.47 * s;
-    const shinL = 0.46 * s;
-    const uarmL = 0.32 * s;
-    const farmL = 0.35 * s;
-    const hipDrop = p.crouch * 0.26 * s;
-
-    _fwd.set(Math.sin(p.yaw), 0, Math.cos(p.yaw));
-    _side.set(Math.cos(p.yaw), 0, -Math.sin(p.yaw));
-
-    const hipY = hipH - hipDrop;
-    // legs: 2-bone IK hip -> foot
-    for (let i = 0; i < 2; i++) {
-      const th = p.walkPhase + i * Math.PI;
-      const lat = (i === 0 ? -1 : 1) * 0.11 * s;
-      const fwdOff = Math.sin(th) * 0.32 * p.walk;
-      const lift = Math.max(0, Math.cos(th)) * 0.08 * p.walk;
-      _ankle.copy(p.pos).addScaledVector(_side, lat).addScaledVector(_fwd, fwdOff);
-      _ankle.y = p.pos.y + 0.06 * s + lift;
-      _hip.copy(p.pos).addScaledVector(_side, lat * 0.86);
-      _hip.y = p.pos.y + hipY;
-      _pole.copy(_fwd);
-      ikMid(_hip, _ankle, thighL, shinL, _pole, _knee);
-      // unisuit leg ends mid-thigh with a white hem band
-      _a.lerpVectors(_hip, _knee, 0.52);
-      _b.lerpVectors(_hip, _knee, 0.58);
-      between(this.thigh[i], _hip, _a, 0.075 * s);
-      between(this.hem[i], _a, _b, 0.072 * s);
-      between(this.bareThigh[i], _b, _knee, 0.066 * s);
-      between(this.shin[i], _knee, _ankle, 0.05 * s);
-      this.foot[i].position.copy(_ankle);
-      this.foot[i].position.y -= 0.03 * s;
-      this.foot[i].scale.set(0.09 * s, 0.06 * s, 0.26 * s);
-      this.foot[i].rotation.set(0, p.yaw, 0);
-    }
-
-    // pelvis + torso
-    _a.copy(p.pos);
-    _a.y = p.pos.y + hipY - 0.02 * s;
-    _b.copy(p.pos);
-    _b.y = p.pos.y + hipY + torsoLen;
-    const leanF = p.crouch * 0.18;
-    _b.addScaledVector(_fwd, leanF);
-    _c.copy(_b).lerp(_a, 0.55);
-    between(this.pelvis, _a, _c, 0.16 * s);
-    between(this.torso, _a.setY(_a.y + 0.1 * s), _b, 0.145 * s);
-
-    // shoulders
-    this.shoulderL.copy(_b).addScaledVector(_side, -0.19 * s);
-    this.shoulderR.copy(_b).addScaledVector(_side, 0.19 * s);
-    this.shoulderL.y = this.shoulderR.y = _b.y;
-
-    // neck + head
-    _a.copy(_b);
-    _a.y += 0.02;
-    between(this.neck, _b, _a.setY(_a.y + 0.12 * s), 0.05 * s);
-    this.head.position.copy(_b);
-    this.head.position.y += 0.22 * s;
-    this.head.position.addScaledVector(_side, Math.sin(p.headTilt) * 0.14);
-    this.head.rotation.set(0, p.yaw, p.headTilt);
-    // white side stripe: reuse trim on torso? keep simple — torso is cardinal unisuit
-
-    // arms: 2-bone IK shoulder -> hand (or relaxed swing)
-    for (let i = 0; i < 2; i++) {
-      const sh = i === 0 ? this.shoulderL : this.shoulderR;
-      const target = i === 0 ? p.handL : p.handR;
-      if (target) _hand.copy(target);
-      else {
-        const th = p.walkPhase + (1 - i) * Math.PI;
-        _hand.copy(sh).addScaledVector(_fwd, Math.sin(th) * 0.15 * p.walk + 0.06);
-        _hand.y -= (uarmL + farmL) * 0.86;
-        _hand.addScaledVector(_side, (i === 0 ? -1 : 1) * 0.05);
+    let dt = p.dt;
+    if (dt === undefined) {
+      const now = performance.now() / 1000;
+      if (now !== _lastT) {
+        _lastDt = _lastT < 0 ? 1 / 60 : Math.min(0.1, now - _lastT);
+        _lastT = now;
       }
-      // elbow pole: out, down, slightly back
-      _pole.copy(_side).multiplyScalar(i === 0 ? -1 : 1);
-      _pole.y -= 0.6;
-      _pole.addScaledVector(_fwd, -0.35).normalize();
-      ikMid(sh, _hand, uarmL, farmL, _pole, _elbow);
-      between(this.uarm[i], sh, _elbow, 0.05 * s);
-      between(this.farm[i], _elbow, _hand, 0.042 * s);
-      this.handM[i].position.copy(_hand);
+      dt = _lastDt;
     }
-    this.lastPose.copy(p.pos);
+    _in.pos.copy(p.pos);
+    _in.yaw = p.yaw;
+    _in.crouch = p.crouch;
+    _in.handL = p.handL;
+    _in.handR = p.handR;
+    _in.hull = p.hull ?? null;
+    _in.dt = dt;
+    this.solver.solve(_in);
+    const rig = this.solver.rig;
+    for (let i = 0; i < this.bones.length; i++) {
+      this.bones[i].position.copy(rig.p[i]);
+      this.bones[i].quaternion.copy(rig.q[i]);
+    }
+    this.pos.copy(p.pos);
+    this.mesh.position.copy(p.pos);
+    this.mesh.rotation.set(0, this.solver.yaw, 0);
+    this.mesh.boundingSphere!.center.copy(rig.p[B.pelvis]);
   }
 }
