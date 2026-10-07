@@ -3,17 +3,24 @@ import type { CrewAI } from './crews';
 import { Craft } from './craft';
 import { type Ctx, clamp, DARK, headingTo, laneZ, rng, smooth, wrap } from './nav';
 import { addMesh, type Loft, loftDeck, loftGeometry, loftRail, std } from './hulls';
-import { type Look, makeLook, type PeopleBatch, type SeatedPose } from './people';
+import { makeLook, type PeopleBatch } from './people';
+import { Boater, flatFoot, makeBoater, makePose } from './humans';
 
-const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
-const _hL = new THREE.Vector3();
-const _hR = new THREE.Vector3();
-const _fL = new THREE.Vector3();
-const _fR = new THREE.Vector3();
-const _hip = new THREE.Vector3();
+const _g = new THREE.Vector3();
+const _m = new THREE.Vector3();
+const _hu = new THREE.Vector3();
+const _tip = new THREE.Vector3();
+const _knob = new THREE.Vector3();
 const UPY = new THREE.Vector3(0, 1, 0);
-const pose: SeatedPose = { hip: _hip, lean: 0, roll: 0, twist: 0, handL: _hL, handR: _hR };
+const EXT = new THREE.Color('#1f2023');
+const hp = makePose();
+/** Helm wheel on the runabout console: centre, in-plane up (tilted toward the console), radius. */
+const WHEEL = new THREE.Vector3(-0.24, 1.0, 0.3);
+const WHEEL_TILT = 0.45;
+const WHEEL_UP = new THREE.Vector3(Math.sin(WHEEL_TILT), Math.cos(WHEEL_TILT), 0);
+const WHEEL_N = new THREE.Vector3(-Math.cos(WHEEL_TILT), Math.sin(WHEEL_TILT), 0);
+const WHEEL_R = 0.17;
 
 /** ~18 ft aluminium coaching launch with a tiller outboard. */
 const LAUNCH: Loft = { length: 5.5, beam: 2.0, draft: 0.28, freeboard: 0.6, transom: 0.86, bowRise: 0.16, section: 0.5, maxAt: 0.42 };
@@ -48,7 +55,7 @@ function outboard(parent: THREE.Object3D, x: number, y: number, cowl: string) {
 export class Launch extends Craft {
   private motor: THREE.Group;
   private mega: THREE.Mesh;
-  private look: Look;
+  private coach: Boater;
   private talk = 0;
   private nextTalk = 6;
   private lastCalls = 0;
@@ -78,7 +85,9 @@ export class Launch extends Craft {
     this.motor = outboard(this.group, -LAUNCH.length / 2 - 0.08, LAUNCH.freeboard + 0.02, DARK);
     this.mega = addMesh(this.group, new THREE.CylinderGeometry(0.035, 0.13, 0.34, 12, 1, true), std('#e9e7e1', 0.5, 0, THREE.DoubleSide));
     this.detail.push(this.motor, this.mega, ring, tank);
-    this.look = makeLook(this.rand, ['#2e2d29', '#8c1515', '#1f2a3a'], { hat: 0.85 });
+    // This draw used to pick the proxy colours; keep it so the talk/wash random sequence is unchanged.
+    makeLook(this.rand, ['#2e2d29', '#8c1515', '#1f2a3a'], { hat: 0.85 });
+    this.coach = new Boater(makeBoater(rng(78), 'coach', true, { tops: ['#2e2d29', '#8c1515', '#1f2a3a'], pfd: ['#b3261e', '#1f2a3a', '#e0a63a'] }));
   }
 
   update(dt: number, time: number, ctx: Ctx) {
@@ -145,30 +154,58 @@ export class Launch extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
+    pb.craft(this.group, this.camDist);
     const talking = this.talk > 0;
-    _hip.set(-1.62, 0.47, -0.42);
-    pose.lean = 0.12;
-    pose.roll = 0;
-    pose.twist = -0.55;
-    pose.torsoLen = 0.54;
-    // Aft (left) hand on the outboard tiller grip, other hand on the megaphone or knee.
-    _v.set(0.3 + 0.37 * Math.cos(this.motor.rotation.y), 0.12, 0).applyEuler(this.motor.rotation).add(this.motor.position);
-    _hL.copy(_v);
-    if (talking) _hR.set(-1.26, 1.18, -0.1);
-    else _hR.set(-1.22, 0.62, -0.3);
-    _fL.set(-1.1, 0.16, -0.55);
-    _fR.set(-1.1, 0.16, -0.25);
-    pose.footL = _fL;
-    pose.footR = _fR;
-    pb.person(pose, this.look);
-    pose.footL = pose.footR = undefined;
-    pose.torsoLen = undefined;
+    const b = this.coach;
+    // Tiller tip and a short rigid extension rising to the coach's aft (left) hand, turning with the motor.
+    _tip.set(0.64, 0.08, 0).applyEuler(this.motor.rotation).add(this.motor.position);
+    _knob.set(0.7, 0.36, 0).applyEuler(this.motor.rotation).add(this.motor.position);
+    pb.limb(_tip, _knob, 0.016, EXT);
+    // Watch the crew: their position in launch-local coords (heading only; roll/pitch are small).
+    const ch = Math.cos(this.heading);
+    const sh = Math.sin(this.heading);
+    const dx = this.crew.x - this.x;
+    const dz = this.crew.z - this.z;
+    hp.gaze.set(dx * ch - dz * sh, 1.1, dx * sh + dz * ch);
+    // Standing aft beside the tiller, feet apart and knees soft for the chop, turned toward the crew.
+    const floor = LAUNCH.freeboard - 0.44 + 0.004;
+    flatFoot(hp.footL, -2.12, floor, 0.06, 0.25);
+    flatFoot(hp.footR, -2.06, floor, 0.4, -0.2);
+    hp.yaw = 0.25;
+    hp.twist = talking ? -0.45 : -0.2;
+    hp.up.set(0.04, 1, 0).normalize();
+    hp.hip.set(-1.98, floor + b.ankle + b.legs * 0.975, 0.23);
+    hp.handL.copy(_knob);
+    hp.thumbL.set(0, 1, 0);
+    hp.knee.set(1, 0, 0.2);
+    hp.kneeOut = 0.05;
+    hp.elbow.set(-0.25, -0.8, 0.5);
+    hp.legs = true;
+    // Mouth estimate for the proxy / first solve; refined from the posed head when skinned.
+    _m.copy(hp.hip).addScaledVector(hp.up, b.shoulder * 1.27);
+    _g.subVectors(hp.gaze, _m).normalize();
+    _hu.copy(UPY);
     if (talking) {
-      this.mega.position.set(-1.25, 1.17, 0.02);
-      _w.set(-0.35, 0.05, -1).normalize();
-      this.mega.quaternion.setFromUnitVectors(UPY, _w);
+      hp.handR.copy(_m).addScaledVector(_g, 0.11).addScaledVector(_hu, -0.07);
+      hp.thumbR.copy(_g);
+    } else {
+      hp.handR.set(hp.hip.x + 0.06, hp.hip.y - 0.36, hp.hip.z + 0.26);
+      hp.thumbR.set(1, 0, 0);
+    }
+    hp.elbow.set(-0.25, -0.8, 0.5);
+    if (pb.human(b, hp) && talking) {
+      b.headPoint(0.105, 0.03, 0, _m);
+      b.headPoint(0.105, 1.03, 0, _hu).sub(_m).normalize();
+      _g.subVectors(hp.gaze, _m).normalize();
+      hp.handR.copy(_m).addScaledVector(_g, 0.11).addScaledVector(_hu, -0.07);
+      hp.thumbR.copy(_g);
+      hp.elbow.set(-0.1, -0.9, 0.75);
+      b.setPose(hp);
+    }
+    if (talking) {
+      // Bell away from the mouth, narrow end just off the lips.
+      this.mega.position.copy(_m).addScaledVector(_g, 0.19);
+      this.mega.quaternion.setFromUnitVectors(UPY, _w.copy(_g).negate());
     } else {
       this.mega.position.set(-1.6, 0.56, 0.4);
       this.mega.quaternion.setFromUnitVectors(UPY, _w.set(1, 0, 0));
@@ -180,7 +217,7 @@ const RUNABOUT: Loft = { length: 6.1, beam: 2.3, draft: 0.38, freeboard: 0.82, t
 
 /** Occasional small motorboat going slowly through on the keep-right lane. */
 export class Motorboat extends Craft {
-  private looks: Look[];
+  private people: Boater[];
   private rand = rng(4242);
   private washAcc = 0;
   private x0 = -1800;
@@ -204,7 +241,21 @@ export class Motorboat extends Craft {
       seat.position.set(-0.75, 0.55, z);
     }
     outboard(this.group, -RUNABOUT.length / 2 - 0.08, RUNABOUT.freeboard, '#d7d8d6');
-    this.looks = [makeLook(this.rand, ['#f4f2ec', '#3d5a80', '#c9b37e'], { hat: 0.8 }), makeLook(this.rand, ['#e07a5f', '#81b29a', '#2e2d29'], { hat: 0.4 })];
+    const steel = std('#c8ccd0', 0.3, 0.8);
+    const helm = addMesh(this.group, new THREE.TorusGeometry(WHEEL_R, 0.014, 8, 28), steel);
+    helm.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(WHEEL_UP, WHEEL_N), WHEEL_UP, WHEEL_N));
+    helm.position.copy(WHEEL);
+    const hub = addMesh(this.group, new THREE.CylinderGeometry(0.03, 0.03, 0.1, 10), steel);
+    hub.quaternion.setFromUnitVectors(UPY, WHEEL_N);
+    hub.position.copy(WHEEL).addScaledVector(WHEEL_N, -0.04);
+    for (const ang of [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3]) {
+      const spoke = addMesh(this.group, new THREE.CylinderGeometry(0.008, 0.008, WHEEL_R, 5), steel);
+      const d = new THREE.Vector3().copy(WHEEL_UP).multiplyScalar(Math.cos(ang)).addScaledVector(new THREE.Vector3(0, 0, 1), Math.sin(ang));
+      spoke.quaternion.setFromUnitVectors(UPY, d);
+      spoke.position.copy(WHEEL).addScaledVector(d, WHEEL_R / 2);
+    }
+    this.detail.push(helm, hub);
+    this.people = [makeBoater(this.rand, 'boater', false, { tops: ['#f4f2ec', '#3d5a80', '#c9b37e'], pfd: null }), makeBoater(this.rand, 'boater', false, { tops: ['#e07a5f', '#81b29a', '#2e2d29'], pfd: null })].map((x) => new Boater(x));
     this.active = false;
   }
 
@@ -248,30 +299,46 @@ export class Motorboat extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
-    // Driver standing at the console.
-    _hip.set(-0.42, 1.38, 0);
-    pose.lean = 0.05;
-    pose.roll = 0;
-    pose.twist = 0;
-    _hL.set(0.02, 1.2, -0.18);
-    _hR.set(0.02, 1.2, 0.18);
-    _fL.set(-0.45, 0.42, -0.14);
-    _fR.set(-0.4, 0.42, 0.14);
-    pose.footL = _fL;
-    pose.footR = _fR;
-    pb.person(pose, this.looks[0]);
-    // Passenger seated aft.
-    _hip.set(-0.8, 0.72, -0.5);
-    pose.lean = -0.1;
-    pose.twist = 0.2;
-    _hL.set(-0.55, 0.78, -0.75);
-    _hR.set(-0.5, 0.75, -0.25);
-    _fL.set(-0.2, 0.42, -0.6);
-    _fR.set(-0.2, 0.42, -0.38);
-    pb.person(pose, this.looks[1]);
-    pose.footL = pose.footR = undefined;
+    pb.craft(this.group, this.camDist);
+    const deck = RUNABOUT.freeboard - 0.42 + 0.004;
+    // Driver seated at the helm, hands at ten and two, eyes over the windscreen.
+    let b = this.people[0];
+    hp.yaw = 0;
+    hp.twist = 0;
+    hp.up.set(Math.sin(0.12), Math.cos(0.12), 0);
+    hp.hip.set(-0.84, 0.7 + b.hipAboveSeat, 0.38);
+    for (let k = 0; k < 2; k++) {
+      const hand = k === 0 ? hp.handL : hp.handR;
+      const thumb = k === 0 ? hp.thumbL : hp.thumbR;
+      const sz = k === 0 ? -1 : 1;
+      hand.copy(WHEEL).addScaledVector(WHEEL_UP, WHEEL_R * 0.5).z += sz * WHEEL_R * 0.866;
+      thumb.copy(WHEEL).addScaledVector(WHEEL_UP, WHEEL_R).sub(hand).normalize();
+    }
+    hp.elbow.set(-0.3, -0.75, 0.6);
+    flatFoot(hp.footL, -0.5, deck, 0.25, 0.12);
+    flatFoot(hp.footR, -0.46, deck, 0.52, -0.12);
+    hp.knee.set(1, 0.8, 0);
+    hp.kneeOut = 0.08;
+    hp.gaze.set(20, 1.6, 0.4);
+    hp.legs = true;
+    pb.human(b, hp);
+    // Passenger on the port seat, leaning back, arm along the gunwale, looking at the shore.
+    b = this.people[1];
+    hp.yaw = 0.2;
+    hp.twist = 0.15;
+    hp.up.set(-Math.sin(0.12), Math.cos(0.12), 0);
+    hp.hip.set(-0.86, 0.7 + b.hipAboveSeat, -0.48);
+    hp.handL.set(-0.95, 0.88, -1.06);
+    hp.thumbL.set(1, 0, 0);
+    hp.handR.set(-0.48, 0.84, -0.36);
+    hp.thumbR.set(1, 0.3, -0.3).normalize();
+    hp.elbow.set(-0.4, -0.7, 0.6);
+    flatFoot(hp.footL, -0.44, deck, -0.62, 0.15);
+    flatFoot(hp.footR, -0.4, deck, -0.34, -0.05);
+    hp.knee.set(1, 0.8, 0);
+    hp.kneeOut = 0.1;
+    hp.gaze.set(-3, 1.2, -12);
+    pb.human(b, hp);
   }
 }
 

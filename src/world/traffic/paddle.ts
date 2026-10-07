@@ -2,13 +2,12 @@ import * as THREE from 'three';
 import { Craft } from './craft';
 import { type Ctx, DARK, clamp, headingTo, laneZ, lerp, rng, smooth, WHITE } from './nav';
 import { addMesh, type Loft, loftDeck, loftGeometry, loftRail, std } from './hulls';
-import { along, type Look, makeLook, type PeopleBatch, type SeatedPose } from './people';
+import { along, type PeopleBatch, type SeatedPose } from './people';
+import { Boater, flatFoot, makeBoater, makePose, setTrunk, thumbsAlong, tiltFoot } from './humans';
 
 const _hip = new THREE.Vector3();
 const _hL = new THREE.Vector3();
 const _hR = new THREE.Vector3();
-const _fL = new THREE.Vector3();
-const _fR = new THREE.Vector3();
 const _B = new THREE.Vector3();
 const _T = new THREE.Vector3();
 const _low = new THREE.Vector3();
@@ -18,6 +17,15 @@ const _O = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const pose: SeatedPose = { hip: _hip, lean: 0, roll: 0, twist: 0, handL: _hL, handR: _hR };
 const SHAFT = new THREE.Color('#1d1e20');
+const hp = makePose();
+
+/** Single-blade grips: bottom-hand thumb up the shaft, top hand over the T-grip (thumb toward the blade side). */
+function singleGrips(side: number) {
+  const top = side >= 0 ? hp.thumbL : hp.thumbR;
+  const bottom = side >= 0 ? hp.thumbR : hp.thumbL;
+  bottom.subVectors(_T, _B).normalize();
+  top.set(0, 0, side >= 0 ? 1 : -1).addScaledVector(bottom, -bottom.z).normalize();
+}
 
 interface StrokeSpec {
   reach: number;
@@ -54,8 +62,9 @@ function singleStroke(phi: number, hip: THREE.Vector3, from: number, to: number,
     const r = (phi - 0.55) / 0.45;
     side = lerp(from, to, smooth(r));
     bx = hip.x + lerp(sp.exit, sp.reach, smooth(r));
-    by = 0.08 + 0.28 * Math.sin(Math.PI * r);
-    bz = side * (sp.beamOff + 0.12 * Math.sin(Math.PI * r));
+    // Recovery: blade feathered forward low over the water and swung out, top hand staying near eye level.
+    by = 0.06 + 0.1 * Math.sin(Math.PI * r);
+    bz = side * (sp.beamOff + 0.22 * Math.sin(Math.PI * r));
     alpha = lerp(0.42, -0.22, smooth(r));
     lean = lerp(sp.leanExit, sp.leanCatch, smooth(r));
   }
@@ -83,14 +92,14 @@ function singleStroke(phi: number, hip: THREE.Vector3, from: number, to: number,
 const OC6: Loft = { length: 13.7, beam: 0.54, draft: 0.22, freeboard: 0.42, transom: 0, bowRise: 0.28, section: 1.0, maxAt: 0.5 };
 const AMA: Loft = { length: 5.2, beam: 0.26, draft: 0.12, freeboard: 0.16, transom: 0, bowRise: 0.08, section: 1.0, maxAt: 0.5 };
 const OC6_SEATS = [3.6, 2.28, 0.96, -0.36, -1.68, -3.0];
-const OC6_STROKE: StrokeSpec = { reach: 0.8, exit: -0.25, depth: -0.4, beamOff: 0.42, len: 1.3, handGap: 0.56, leanCatch: 0.5, leanExit: 0.05 };
+const OC6_STROKE: StrokeSpec = { reach: 0.8, exit: -0.25, depth: -0.4, beamOff: 0.42, len: 1.25, handGap: 0.56, leanCatch: 0.5, leanExit: 0.05 };
 
 export class OutriggerCanoe extends Craft {
   private phi = 0;
   private strokes = 0;
   private flip = 1;
   private fromFlip = 1;
-  private looks: Look[];
+  private crew: Boater[];
   private bladeC: THREE.Color[];
 
   constructor(parent: THREE.Object3D, x: number, dir: number, private readonly frac: number, private readonly x0: number, private readonly x1: number, hull: string) {
@@ -118,7 +127,7 @@ export class OutriggerCanoe extends Craft {
     }
     const rand = rng(606);
     const tops = ['#1f4e79', '#2e2d29', '#f4f2ec', '#c4302b', '#2a7f62', '#e0a63a', '#5a5f66'];
-    this.looks = OC6_SEATS.map(() => makeLook(rand, tops, { hat: 0.7 }));
+    this.crew = OC6_SEATS.map(() => new Boater(makeBoater(rand, 'oc6', false, { tops })));
     this.bladeC = OC6_SEATS.map((_, i) => new THREE.Color(i === 5 ? '#c9b37e' : '#1d1e20'));
     this.group.position.z = laneZ(x, dir, frac);
   }
@@ -149,8 +158,7 @@ export class OutriggerCanoe extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
+    pb.craft(this.group, this.camDist);
     for (let i = 0; i < 6; i++) {
       const sx = OC6_SEATS[i];
       _hip.set(sx, 0.14, 0);
@@ -170,7 +178,24 @@ export class OutriggerCanoe extends Craft {
         pose.twist = s * 0.5;
         pose.roll = s * 0.05;
       } else singleStroke(phi, _hip, from, to, OC6_STROKE);
-      pb.person(pose, this.looks[i]);
+      // Seated on the thwart, knees braced against the hull, paddle-side leg forward.
+      const b = this.crew[i];
+      const side = _hL.distanceToSquared(_T) < 1e-8 ? 1 : -1;
+      hp.yaw = 0;
+      hp.twist = pose.twist;
+      setTrunk(hp, pose.lean * 0.8, pose.roll);
+      hp.hip.set(sx, 0.1 + b.hipAboveSeat, 0);
+      hp.handL.copy(_hL);
+      hp.handR.copy(_hR);
+      singleGrips(side);
+      hp.elbow.set(-0.3, -0.7, 0.55);
+      tiltFoot(hp.footL, sx + 0.4 + (side < 0 ? 0.08 : 0), -0.12, -0.075, 0.1, 0.6);
+      tiltFoot(hp.footR, sx + 0.4 + (side > 0 ? 0.08 : 0), -0.12, 0.075, -0.1, 0.6);
+      hp.knee.set(0.3, 1, 0);
+      hp.kneeOut = 0.04;
+      hp.gaze.set(sx + 12, 0.9, 0);
+      hp.legs = false;
+      pb.human(b, hp);
       pb.paddle(_T, _B, false, SHAFT, this.bladeC[i], 0.48, 0.23);
     }
   }
@@ -181,7 +206,7 @@ const KAYAK: Loft = { length: 5.0, beam: 0.6, draft: 0.16, freeboard: 0.26, tran
 /** Touring kayak with a double-bladed paddle, ~55 strokes/min alternating sides. */
 export class Kayak extends Craft {
   private phi: number;
-  private look: Look;
+  private paddler: Boater;
   private bladeC: THREE.Color;
   follower?: Kayak;
 
@@ -189,7 +214,7 @@ export class Kayak extends Craft {
     super(parent, 'traffic-kayak', x, 0, dir > 0 ? 0 : Math.PI, 2.5, 0.9);
     this.dir = dir;
     addMesh(this.group, loftGeometry(KAYAK, 28, 10), std(color, 0.35, 0, THREE.DoubleSide), true);
-    addMesh(this.group, loftDeck(KAYAK, 0, 1), std(color, 0.35));
+    addMesh(this.group, loftDeck(KAYAK, 0, 1), std(color, 0.35, 0, THREE.DoubleSide)); // [people:boaters] deck faces down; without this the paddler's legs show through
     const coaming = addMesh(this.group, new THREE.TorusGeometry(0.3, 0.03, 6, 18), std(DARK, 0.6));
     coaming.rotation.x = Math.PI / 2;
     coaming.scale.set(1.45, 0.78, 1);
@@ -201,7 +226,7 @@ export class Kayak extends Craft {
     this.detail.push(coaming);
     const rand = rng(seed);
     this.phi = rand();
-    this.look = makeLook(rand, ['#2e2d29', '#f4f2ec', '#3d5a80', '#81b29a'], { pfd: ['#e4572e', '#f3a712', '#2e86ab', '#c4302b'], hat: 0.6 });
+    this.paddler = new Boater(makeBoater(rand, 'kayak', false, { tops: ['#2e2d29', '#f4f2ec', '#3d5a80', '#81b29a'], pfd: ['#e4572e', '#f3a712', '#2e86ab', '#c4302b'] }));
     this.bladeC = new THREE.Color(rand() < 0.5 ? '#f3a712' : '#f4f2ec');
     this.group.position.z = laneZ(x, dir, frac) + (buddy ? -4 * dir : 0);
   }
@@ -231,13 +256,11 @@ export class Kayak extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
+    pb.craft(this.group, this.camDist);
     const half = this.phi < 0.5 ? this.phi * 2 : this.phi * 2 - 1;
     const s = this.phi < 0.5 ? 1 : -1;
     const hx = -0.25;
-    _hip.set(hx, 0.12, 0);
-    _C.set(hx + 0.42, 0.62, 0);
+    _C.set(hx + 0.4, 0.6, 0);
     if (half < 0.7) {
       const u = half / 0.7;
       const dip = smooth(u / 0.18) * (1 - smooth((u - 0.8) / 0.2));
@@ -254,12 +277,27 @@ export class Kayak extends Craft {
     _O.copy(_C).addScaledVector(_d, -1.1);
     const low = s > 0 ? _hR : _hL;
     const high = s > 0 ? _hL : _hR;
-    low.copy(_C).addScaledVector(_d, 0.38);
-    high.copy(_C).addScaledVector(_d, -0.38);
-    pose.lean = 0.22;
-    pose.twist = -s * 0.35 * (half < 0.7 ? 1 - half / 0.7 : 0);
-    pose.roll = 0;
-    pb.person(pose, this.look);
+    low.copy(_C).addScaledVector(_d, 0.34);
+    high.copy(_C).addScaledVector(_d, -0.34);
+    // Upright, low in the seat, legs in the hull with knees lightly splayed under the deck. The trunk
+    // winds up toward the catch (blade-side shoulder forward) and unwinds through the drive.
+    const b = this.paddler;
+    const tw = half < 0.7 ? lerp(-0.5, 0.3, smooth(half / 0.7)) : lerp(0.3, 0.5, smooth((half - 0.7) / 0.3));
+    hp.yaw = 0;
+    hp.twist = s * tw;
+    setTrunk(hp, 0.14 + 0.08 * (half < 0.7 ? 1 - smooth(half / 0.7) : smooth((half - 0.7) / 0.3)), s * 0.03);
+    hp.hip.set(hx, -0.05 + b.hipAboveSeat, 0);
+    hp.handL.copy(_hL);
+    hp.handR.copy(_hR);
+    thumbsAlong(hp);
+    hp.elbow.set(-0.35, -0.65, 0.6);
+    tiltFoot(hp.footL, hx + 0.98, -0.11, -0.12, 0.2, 1.05);
+    tiltFoot(hp.footR, hx + 0.98, -0.11, 0.12, -0.2, 1.05);
+    hp.knee.set(0.1, 1, 0);
+    hp.kneeOut = 0.2;
+    hp.gaze.set(hx + 15, 0.8, 0);
+    hp.legs = false;
+    pb.human(b, hp);
     pb.paddle(_O, _A, true, SHAFT, this.bladeC, 0.44, 0.17);
   }
 }
@@ -287,7 +325,7 @@ export class Paddleboard extends Craft {
   private strokes = 0;
   private side = 1;
   private from = 1;
-  private look: Look;
+  private rider: Boater;
   private bladeC = new THREE.Color(DARK);
 
   constructor(parent: THREE.Object3D, x: number, dir: number, private readonly frac: number, private readonly x0: number, private readonly x1: number, color: string) {
@@ -299,7 +337,7 @@ export class Paddleboard extends Craft {
     pad.rotation.x = -Math.PI / 2;
     pad.position.set(-0.2, 0.11, 0);
     this.group.position.z = laneZ(x, dir, frac);
-    this.look = makeLook(rng(1717), ['#81b29a', '#f4f2ec', '#e07a5f', '#3d5a80'], { hat: 0.7, bottoms: ['#2e2d29', '#3d5a80'] });
+    this.rider = new Boater(makeBoater(rng(1717), 'sup', true, { tops: ['#81b29a', '#f4f2ec', '#e07a5f', '#3d5a80'] }));
   }
 
   update(dt: number, time: number, ctx: Ctx) {
@@ -320,17 +358,29 @@ export class Paddleboard extends Craft {
 
   draw(pb: PeopleBatch) {
     if (this.camDist > 450) return;
-    this.group.updateMatrixWorld();
-    pb.frame(this.group.matrixWorld);
+    pb.craft(this.group, this.camDist);
     _hip.set(-0.25, 0.98, 0);
     singleStroke(this.phi, _hip, this.from, this.side, SUP_STROKE);
-    _hip.y = 0.98 - 0.12 * pose.lean;
-    _fL.set(-0.2, 0.11, -0.2);
-    _fR.set(-0.2, 0.11, 0.2);
-    pose.footL = _fL;
-    pose.footR = _fR;
-    pb.person(pose, this.look);
-    pose.footL = pose.footR = undefined;
+    // Parallel stance about hip width over the carry handle, knees soft and bending more into the catch,
+    // hinging at the hips; the hips sit back over the heels as the trunk reaches forward.
+    const b = this.rider;
+    const side = _hL.distanceToSquared(_T) < 1e-8 ? 1 : -1;
+    const reach = clamp((pose.lean - SUP_STROKE.leanExit) / (SUP_STROKE.leanCatch - SUP_STROKE.leanExit), 0, 1);
+    flatFoot(hp.footL, -0.36, 0.115, -0.15, 0.08);
+    flatFoot(hp.footR, -0.36, 0.115, 0.15, -0.08);
+    hp.yaw = 0;
+    hp.twist = pose.twist * 1.2;
+    setTrunk(hp, 0.1 + pose.lean * 0.75, pose.roll);
+    hp.hip.set(-0.32 - 0.07 * reach, 0.115 + b.ankle + b.legs * (0.975 - 0.05 * reach), 0);
+    hp.handL.copy(_hL);
+    hp.handR.copy(_hR);
+    singleGrips(side);
+    hp.elbow.set(-0.3, -0.75, 0.5);
+    hp.knee.set(1, 0, 0);
+    hp.kneeOut = 0.04;
+    hp.gaze.set(12, 1.3, 0);
+    hp.legs = true;
+    pb.human(b, hp);
     pb.paddle(_T, _B, false, SHAFT, this.bladeC, 0.46, 0.21);
   }
 }
