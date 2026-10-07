@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CARDINAL, DARK, WHITE, type Anthro } from './anthro';
 import { Builder, type Ring, type W } from './builder';
 import { B, gripLocal, type Rig } from './rig';
+import { ROWING_UNISUIT, type Outfit } from './outfit';
 
 const ss = (e0: number, e1: number, x: number) => {
   const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1);
@@ -104,7 +105,7 @@ class HeadShape {
   }
 }
 
-export function buildFigureGeometry(a: Anthro, rest: Rig): THREE.BufferGeometry {
+export function buildFigureGeometry(a: Anthro, rest: Rig, _outfit: Outfit = ROWING_UNISUIT): THREE.BufferGeometry {
   const mats: THREE.Matrix4[] = [];
   for (let i = 0; i < rest.p.length; i++) mats.push(new THREE.Matrix4().compose(rest.p[i], rest.q[i], new THREE.Vector3(1, 1, 1)));
   const b = new Builder(mats);

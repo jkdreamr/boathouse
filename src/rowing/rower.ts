@@ -15,7 +15,7 @@ export interface RowerPose {
   feather?: number;
 }
 
-const MATERIAL = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0 });
+export const FIGURE_MATERIAL = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0 });
 
 const REST: RigPose = {
   seatX: 0,
@@ -45,7 +45,7 @@ export class RowerFigure {
     const rest = makeRig();
     solveRig(this.anthro, REST, rest);
     const geo = buildFigureGeometry(this.anthro, rest);
-    this.mesh = new THREE.SkinnedMesh(geo, MATERIAL);
+    this.mesh = new THREE.SkinnedMesh(geo, FIGURE_MATERIAL);
     for (let i = 0; i < rest.p.length; i++) {
       const bone = new THREE.Bone();
       bone.position.copy(rest.p[i]);
