@@ -13,6 +13,25 @@ export interface Ring {
 
 export type ColorFn = (local: THREE.Vector3, y: number, ang: number) => THREE.Color;
 
+/** Roughness FIGURE_MATERIAL is created with; the `figSurf` attribute stores offsets from it. */
+export const BASE_ROUGHNESS = 0.62;
+
+/** A vertex colour that also carries the surface response (roughness, metalness). */
+export class Paint extends THREE.Color {
+  rough = BASE_ROUGHNESS;
+  metal = 0;
+  paint(c: THREE.Color, rough: number, metal = 0) {
+    this.copy(c);
+    this.rough = rough;
+    this.metal = metal;
+    return this;
+  }
+}
+
+export function paint(hex: string | THREE.Color, rough: number, metal = 0) {
+  return new Paint().paint(hex instanceof THREE.Color ? hex : new THREE.Color(hex), rough, metal);
+}
+
 const _p = new THREE.Vector3();
 
 /** Accumulates one skinned, vertex-coloured, indexed geometry built piecewise in bone-local frames. */
@@ -22,6 +41,10 @@ export class Builder {
   readonly si: number[] = [];
   readonly sw: number[] = [];
   readonly idx: number[] = [];
+  readonly surf: number[] = [];
+  /** Surface response used for plain THREE.Color vertices. */
+  rough = BASE_ROUGHNESS;
+  metal = 0;
   private m = new THREE.Matrix4();
   private mirror = false;
 
@@ -40,6 +63,8 @@ export class Builder {
     _p.applyMatrix4(this.m);
     this.pos.push(_p.x, _p.y, _p.z);
     this.col.push(c.r, c.g, c.b);
+    if (c instanceof Paint) this.surf.push(c.rough - BASE_ROUGHNESS, c.metal);
+    else this.surf.push(this.rough - BASE_ROUGHNESS, this.metal);
     let total = 0;
     for (let i = 1; i < w.length; i += 2) total += w[i];
     for (let k = 0; k < 4; k++) {
@@ -70,7 +95,7 @@ export class Builder {
    * Superelliptic tube along local +Y. Rings must be ordered by y. Ends are closed
    * with a fan to the ring centre (callers taper the last rings for a rounded cap).
    */
-  tube(rings: Ring[], seg: number, n: number, color: ColorFn, weight: (y: number, ang: number) => W) {
+  tube(rings: Ring[], seg: number, n: number, color: ColorFn, weight: (y: number, ang: number) => W, push?: (y: number, ang: number) => number) {
     const e = 2 / n;
     const v = new THREE.Vector3();
     const start = this.pos.length / 3;
@@ -79,7 +104,8 @@ export class Builder {
         const ang = (j / seg) * Math.PI * 2;
         const c = Math.cos(ang);
         const s = Math.sin(ang);
-        v.set((r.ox ?? 0) + r.rx * Math.sign(c) * Math.pow(Math.abs(c), e), r.y, (r.oz ?? 0) + r.rz * Math.sign(s) * Math.pow(Math.abs(s), e));
+        const k = push ? push(r.y, ang) : 0;
+        v.set((r.ox ?? 0) + (r.rx + k) * Math.sign(c) * Math.pow(Math.abs(c), e), r.y, (r.oz ?? 0) + (r.rz + k) * Math.sign(s) * Math.pow(Math.abs(s), e));
         this.vert(v, color(v, r.y, ang), weight(r.y, ang));
       }
     }
@@ -108,7 +134,16 @@ export class Builder {
   }
 
   /** Tube swept along a polyline (fingers, nose). `ref` sets the ring orientation. */
-  sweep(pts: THREE.Vector3[], radii: number[], seg: number, ref: THREE.Vector3, c: THREE.Color, w: W, flat = 1) {
+  sweep(
+    pts: THREE.Vector3[],
+    radii: number[],
+    seg: number,
+    ref: THREE.Vector3,
+    color: THREE.Color | ((p: THREE.Vector3, i: number) => THREE.Color),
+    w: W,
+    flat = 1,
+  ) {
+    const col = (p: THREE.Vector3, i: number) => (typeof color === 'function' ? color(p, i) : color);
     const start = this.pos.length / 3;
     const t = new THREE.Vector3();
     const nn = new THREE.Vector3();
@@ -125,7 +160,7 @@ export class Builder {
         v.copy(pts[i])
           .addScaledVector(nn, Math.cos(ang) * radii[i])
           .addScaledVector(bb, Math.sin(ang) * radii[i] * flat);
-        this.vert(v, c, w);
+        this.vert(v, col(v, i), w);
       }
     }
     for (let i = 0; i < pts.length - 1; i++) {
@@ -141,7 +176,7 @@ export class Builder {
       const b = pts[Math.min(pts.length - 1, i + 1)];
       t.subVectors(b, a).normalize();
       v.copy(pts[i]).addScaledVector(t, push * radii[i] * 0.8);
-      const c0 = this.vert(v, c, w);
+      const c0 = this.vert(v, col(v, i), w);
       for (let j = 0; j < seg; j++) {
         const p = start + i * seg + j;
         const q = start + i * seg + ((j + 1) % seg);
@@ -248,12 +283,43 @@ export class Builder {
     }
   }
 
+  /**
+   * Parametric grid: point(i, j, out) for i in 0..rows, j in 0..cols. With wrap, column `cols`
+   * reuses column 0 (closed ring). Faces wind so (d/di x d/dj) is the outward normal.
+   */
+  grid(
+    rows: number,
+    cols: number,
+    wrap: boolean,
+    point: (i: number, j: number, out: THREE.Vector3) => void,
+    color: (i: number, j: number, p: THREE.Vector3) => THREE.Color,
+    weight: (i: number, j: number, p: THREE.Vector3) => W,
+  ) {
+    const start = this.pos.length / 3;
+    const v = new THREE.Vector3();
+    const nc = wrap ? cols : cols + 1;
+    for (let i = 0; i <= rows; i++)
+      for (let j = 0; j < nc; j++) {
+        point(i, j, v);
+        this.vert(v, color(i, j, v), weight(i, j, v));
+      }
+    for (let i = 0; i < rows; i++)
+      for (let j = 0; j < cols; j++) {
+        const a = start + i * nc + j;
+        const b = start + i * nc + ((j + 1) % nc);
+        this.tri(a, a + nc, b);
+        this.tri(b, a + nc, b + nc);
+      }
+    return start;
+  }
+
   geometry() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(this.si, 4));
     g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(this.sw, 4));
+    g.setAttribute('figSurf', new THREE.Float32BufferAttribute(this.surf, 2));
     g.setIndex(this.idx);
     g.computeVertexNormals();
     return g;
