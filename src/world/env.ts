@@ -244,7 +244,7 @@ export class Environment {
     scene.add(this.sun, this.sun.target, this.hemi);
 
     const normals = waterNormalTexture();
-    this.water = new Water(new THREE.PlaneGeometry(30000, 30000), {
+    this.water = new Water(new THREE.PlaneGeometry(16000, 16000), {
       textureWidth: 1024,
       textureHeight: 1024,
       waterNormals: normals,
