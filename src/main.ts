@@ -82,7 +82,7 @@ function nearLaunch() {
 function setHelp() {
   $('help').textContent =
     mode === 'launch'
-      ? 'W / S forward and reverse · A / D steer · Esc to return to the dock'
+      ? 'W / S forward and reverse · A / D steer · V for onboard view · Esc to return to the dock'
       : 'WASD to walk · Shift to run · Space to jump · E to board the launch · T for time of day · Esc to release the mouse';
 }
 
@@ -175,6 +175,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyE' && !e.repeat) board();
     if (e.code === 'Space') e.preventDefault();
   } else if (mode === 'launch') {
+    if (e.code === 'KeyV' && !e.repeat) launch.onboardView = !launch.onboardView;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'Escape') toWalk();
   }
